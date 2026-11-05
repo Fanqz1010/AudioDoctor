@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    name: Build on macOS
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build release executable
+        run: swift build -c release
+      - name: Generate stereo test audio
+        run: |
+          python3 - <<'PY'
+          import math, struct, wave
+          path = "test-stereo.wav"
+          rate = 44100
+          frames = 44100
+          with wave.open(path, "wb") as w:
+              w.setnchannels(2)
+              w.setsampwidth(2)
+              w.setframerate(rate)
+              for i in range(frames):
+                  value = int(18000 * math.sin(2 * math.pi * 440 * i / rate))
+                  w.writeframesraw(struct.pack("<hh", value, value))
+          PY
+      - name: Run audio CLI smoke tests
+        run: |
+          BINARY=".build/release/AudioDoctor"
+          "$BINARY" analyze test-stereo.wav > analysis.json
+          "$BINARY" convert test-stereo.wav test-51.wav surround51
+          "$BINARY" convert test-stereo.wav test-ambi.wav ambix
+          afinfo test-51.wav | grep "6 ch"
+          afinfo test-ambi.wav | grep "4 ch"

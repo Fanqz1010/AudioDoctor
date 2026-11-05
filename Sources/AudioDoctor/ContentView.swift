@@ -1,0 +1,431 @@
+import AVFoundation
+import SwiftUI
+
+final class AppModel: ObservableObject {
+    @Published var inputURL: URL?
+    @Published var referenceURL: URL?
+    @Published var report: AudioAnalysisReport?
+    @Published var referenceReport: AudioAnalysisReport?
+    @Published var processedReport: AudioAnalysisReport?
+    @Published var isWorking = false
+    @Published var message: String?
+    @Published var errorMessage: String?
+    @Published var repair = RepairOptions()
+    @Published var channelTarget = "keep"
+    @Published var outputFormat = "wav"
+    @Published var bitDepth = 24
+
+    func loadFile(url: URL) {
+        errorMessage = nil
+        message = nil
+        isWorking = true
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let started = Date()
+                let loaded = try AudioIO.loadChannels(url: url)
+                let analysis = AudioAnalyzer.analyze(channels: loaded.channels, sampleRate: loaded.sampleRate, filename: url.lastPathComponent)
+                DispatchQueue.main.async {
+                    self.inputURL = url
+                    self.report = analysis
+                    self.processedReport = nil
+                    self.isWorking = false
+                    self.message = String(format: "分析完成，用时 %.1f 秒", Date().timeIntervalSince(started))
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.isWorking = false
+                    self.errorMessage = "无法读取音频：\(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    func loadReference(url: URL) {
+        referenceURL = url
+        referenceReport = nil
+        message = "参考曲已导入：\(url.lastPathComponent)"
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let loaded = try AudioIO.loadChannels(url: url)
+                let analysis = AudioAnalyzer.analyze(channels: loaded.channels, sampleRate: loaded.sampleRate, filename: url.lastPathComponent)
+                DispatchQueue.main.async {
+                    self.referenceReport = analysis
+                    self.message = "参考曲分析完成：\(url.lastPathComponent)"
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.errorMessage = "参考曲无法读取：\(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    func processAndExport() {
+        guard inputURL != nil else { return }
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.audio]
+        panel.nameFieldStringValue = processedName()
+        panel.begin { response in
+            guard response == .OK, let outputURL = panel.url else { return }
+            self.runProcessing(outputURL: outputURL)
+        }
+    }
+
+    private func processedName() -> String {
+        guard let inputURL else { return "processed.wav" }
+        let base = inputURL.deletingPathExtension().lastPathComponent
+        let suffix: String
+        switch channelTarget {
+        case "mono": suffix = "repaired-mono"
+        case "stereo": suffix = "repaired-stereo"
+        case "surround51": suffix = "repaired-5.1"
+        case "ambix": suffix = "repaired-AmbiX"
+        default: suffix = "repaired"
+        }
+        return "\(base)-\(suffix).\(outputFormat)"
+    }
+
+    private func runProcessing(outputURL: URL) {
+        isWorking = true
+        errorMessage = nil
+        message = nil
+        guard let input = inputURL else { return }
+        let options = repair
+        let target = channelTarget
+        let bits = bitDepth
+        let reference = referenceURL
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let loaded = try AudioIO.loadChannels(url: input)
+                let referenceChannels = reference == nil ? nil : try AudioIO.loadChannels(url: reference!).channels
+                // Repair the source first, then convert. The repair and loudness chain
+                // is designed around normal speaker channels, not AmbiX components.
+                var channels = AudioProcessor.repair(channels: loaded.channels, sampleRate: loaded.sampleRate, options: options, referenceChannels: referenceChannels)
+                let analysisSource = channels
+                if target != "keep" {
+                    channels = try AudioProcessor.convert(channels: channels, sampleRate: loaded.sampleRate, target: target)
+                }
+                try AudioIO.write(channels: channels, sampleRate: loaded.sampleRate, url: outputURL, bitDepth: bits)
+                // Keep metrics on the repaired source because W/Y/Z/X are not speaker
+                // signals and would make stereo phase/loudness cards misleading.
+                let after = AudioAnalyzer.analyze(channels: analysisSource, sampleRate: loaded.sampleRate, filename: outputURL.lastPathComponent)
+                DispatchQueue.main.async {
+                    self.isWorking = false
+                    self.processedReport = after
+                    self.message = "处理完成：\(outputURL.lastPathComponent)" + (target == "surround51" || target == "ambix" ? "（空间指标基于修复后的立体声源）" : "")
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.isWorking = false
+                    self.errorMessage = "处理失败：\(error.localizedDescription)"
+                }
+            }
+        }
+    }
+}
+
+struct ContentView: View {
+    @EnvironmentObject var model: AppModel
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            Divider()
+            if model.isWorking { ProgressView("正在分析音频…").padding() }
+            HStack(alignment: .top, spacing: 20) {
+                controls
+                if let report = model.report {
+                    ScrollView { analysis(report) }
+                } else {
+                    emptyState
+                }
+            }
+            .padding(20)
+        }
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    private var header: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Audio Doctor 音频体检与修复")
+                    .font(.title2.weight(.semibold))
+                    Text("v0.2 · 拖入音频 → 客观体检 → 一键转换 / 修复 / 导出")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            if model.isWorking { ProgressView().controlSize(.small) }
+        }
+        .padding(20)
+    }
+
+    private var controls: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            DropZone(title: "拖入要检查的音频", subtitle: "支持 WAV / AIFF / M4A / MP3") { url in
+                model.loadFile(url: url)
+            }
+            DropZone(title: "可选：拖入参考曲", subtitle: "用于判断「丰满度」差距") { url in
+                model.loadReference(url: url)
+            }
+            GroupBox("一键转换") {
+                Picker("声道", selection: $model.channelTarget) {
+                    Text("保持原样").tag("keep")
+                    Text("立体声 → 单声道").tag("mono")
+                    Text("单声道 → 立体声").tag("stereo")
+                    Text("立体声 → 5.1 环绕声").tag("surround51")
+                    Text("立体声 → AmbiX 全景声").tag("ambix")
+                }
+                .pickerStyle(.radioGroup)
+                if model.channelTarget == "surround51" {
+                    Text("输出 6 声道：L、R、C、LFE、Ls、Rs")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                } else if model.channelTarget == "ambix" {
+                    Text("输出一阶 AmbiX：W、Y、Z、X（ACN/SN3D）")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Text("这是开源空间音频格式，不是 Dolby Atmos 母版")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                }
+            }
+            GroupBox("AI 音感修复") {
+                Toggle("去高频沙沙声", isOn: $model.repair.deHiss)
+                Toggle("补足低频与身体感", isOn: $model.repair.fullness)
+                Toggle("使用参考曲频响匹配", isOn: $model.repair.matchReference)
+                    .disabled(model.referenceURL == nil)
+                Toggle("增加细节与空气感", isOn: $model.repair.exciter)
+                Toggle("响度标准化", isOn: $model.repair.loudnessNormalize)
+                HStack {
+                    Text("目标响度")
+                    TextField("-14", value: $model.repair.targetLUFS, format: .number)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 70)
+                    Text("LUFS")
+                }
+                HStack {
+                    Text("修复强度")
+                    Slider(value: $model.repair.strength, in: 0...1.5, step: 0.1)
+                    Text(String(format: "%.1f", model.repair.strength))
+                        .monospacedDigit()
+                        .frame(width: 30)
+                }
+            }
+            GroupBox("导出") {
+                Picker("格式", selection: $model.outputFormat) {
+                    Text("WAV").tag("wav")
+                    Text("AIFF").tag("aiff")
+                }
+                Picker("位深", selection: $model.bitDepth) {
+                    Text("16-bit").tag(16)
+                    Text("24-bit").tag(24)
+                }
+                Button {
+                    model.processAndExport()
+                } label: {
+                    Label("处理并导出", systemImage: "wand.and.stars")
+                        .frame(maxWidth: .infinity)
+                }
+                .controlSize(.large)
+                .keyboardShortcut(.return, modifiers: .command)
+            }
+            if let message = model.message {
+                Label(message, systemImage: "checkmark.circle").foregroundStyle(.green)
+            }
+            if let error = model.errorMessage {
+                Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.red)
+            }
+            Spacer()
+        }
+        .frame(width: 340)
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "waveform")
+                .font(.system(size: 56))
+                .foregroundStyle(.secondary)
+            Text("把音频拖到左侧，就会显示客观指标")
+                .font(.headline)
+            Text("包括响度、真峰、削波、相位、立体声宽度、频段分布和疑似 AI 感评分")
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func analysis(_ report: AudioAnalysisReport) -> some View {
+        VStack(alignment: .leading, spacing: 18) {
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+                MetricCard(title: "综合响度", value: report.integratedLUFS.map { String(format: "%.1f LUFS", $0) } ?? "—", quality: loudnessQuality(report.integratedLUFS))
+                MetricCard(title: "真峰", value: String(format: "%.2f dBTP", report.truePeakDb), quality: report.truePeakDb <= -1 ? .good : .warning)
+                MetricCard(title: "失真风险", value: report.distortionRisk, quality: report.distortionRisk.hasPrefix("低") ? .good : .warning)
+                MetricCard(title: "相位相关性", value: report.stereoCorrelation.map { String(format: "%.2f", $0) } ?? "单声道", quality: phaseQuality(report.stereoCorrelation))
+                MetricCard(title: "立体声宽度", value: report.stereoWidthPercent.map { String(format: "%.0f%%", $0) } ?? "—", quality: .neutral)
+                MetricCard(title: "疑似 AI 感", value: String(format: "%.0f / 100", report.aiFeelScore ?? 0), quality: aiQuality(report.aiFeelScore))
+            }
+            GroupBox("基础信息") {
+                Grid(alignment: .leading, horizontalSpacing: 30, verticalSpacing: 8) {
+                    GridRow { Text("文件"); Text(report.filename) }
+                    GridRow { Text("时长"); Text(String(format: "%.1f 秒", report.durationSeconds)) }
+                    GridRow { Text("采样率"); Text(String(format: "%.0f Hz", report.sampleRate)) }
+                    GridRow { Text("声道"); Text("\(report.channels)") }
+                    GridRow { Text("样本峰值"); Text(String(format: "%.2f dBFS", report.samplePeakDb)) }
+                    GridRow { Text("RMS"); Text(String(format: "%.2f dBFS", report.rmsDb)) }
+                    GridRow { Text("峰值因子"); Text(String(format: "%.1f dB", report.crestFactorDb)) }
+                    GridRow { Text("直流偏移"); Text(String(format: "%.5f", report.dcOffset)) }
+                    GridRow { Text("疑似削波采样"); Text("\(report.clippedSamples)") }
+                }
+            }
+            GroupBox("频段能量分布") {
+                VStack(spacing: 8) {
+                    ForEach(report.bandEnergies) { band in
+                        HStack {
+                            Text(band.name).frame(width: 60, alignment: .leading)
+                            ProgressView(value: min(100, band.energyPercent), total: 100)
+                            Text(String(format: "%.1f%%", band.energyPercent)).monospacedDigit().frame(width: 60, alignment: .trailing)
+                        }
+                    }
+                }
+            }
+            if let reference = model.referenceReport, let current = model.report {
+                GroupBox("参考曲对比（能量占比）") {
+                    VStack(spacing: 8) {
+                        HStack {
+                            Text("频段").frame(width: 60, alignment: .leading)
+                            Text("当前").frame(width: 70, alignment: .trailing)
+                            Text("参考").frame(width: 70, alignment: .trailing)
+                            Text("差距").frame(width: 70, alignment: .trailing)
+                        }
+                        .font(.caption)
+                        ForEach(current.bandEnergies) { band in
+                            if let ref = reference.bandEnergies.first(where: { $0.name == band.name }) {
+                                let difference = ref.energyPercent - band.energyPercent
+                                HStack {
+                                    Text(band.name).frame(width: 60, alignment: .leading)
+                                    Text(String(format: "%.1f%%", band.energyPercent)).monospacedDigit().frame(width: 70, alignment: .trailing)
+                                    Text(String(format: "%.1f%%", ref.energyPercent)).monospacedDigit().frame(width: 70, alignment: .trailing)
+                                    Text(String(format: "%+.1f%%", difference))
+                                        .monospacedDigit()
+                                        .foregroundStyle(abs(difference) > 5 ? Color.orange : Color.secondary)
+                                        .frame(width: 70, alignment: .trailing)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            GroupBox("建议") {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(report.recommendations, id: \.self) { recommendation in
+                        Label(recommendation, systemImage: "checkmark.seal")
+                    }
+                }
+            }
+            if let processed = model.processedReport {
+                GroupBox("处理前后对比") {
+                    VStack(spacing: 8) {
+                        comparisonRow("综合响度", before: report.integratedLUFS.map { String(format: "%.1f LUFS", $0) } ?? "—", after: processed.integratedLUFS.map { String(format: "%.1f LUFS", $0) } ?? "—")
+                        comparisonRow("真峰", before: String(format: "%.2f dBTP", report.truePeakDb), after: String(format: "%.2f dBTP", processed.truePeakDb))
+                        comparisonRow("高频噪声占比", before: String(format: "%.1f dB", report.hissRatioDb ?? -120), after: String(format: "%.1f dB", processed.hissRatioDb ?? -120))
+                        comparisonRow("疑似 AI 感", before: String(format: "%.0f / 100", report.aiFeelScore ?? 0), after: String(format: "%.0f / 100", processed.aiFeelScore ?? 0))
+                    }
+                }
+            }
+            Text("说明：响度、峰值、相位和频段分布是客观测量；「疑似 AI 感」是基于频段缺失与高频噪声占比的启发式评分，仅作参考，不等于听感最终判决。")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func loudnessQuality(_ value: Float?) -> MetricQuality {
+        guard let value else { return .neutral }
+        if value < -25 || value > -8 { return .warning }
+        return .good
+    }
+
+    private func phaseQuality(_ value: Float?) -> MetricQuality {
+        guard let value else { return .neutral }
+        if value < 0.2 { return .warning }
+        return .good
+    }
+
+    private func aiQuality(_ value: Float?) -> MetricQuality {
+        guard let value else { return .neutral }
+        if value > 65 { return .warning }
+        return .neutral
+    }
+
+    private func comparisonRow(_ name: String, before: String, after: String) -> some View {
+        HStack {
+            Text(name).frame(width: 110, alignment: .leading)
+            Text(before).monospacedDigit().frame(width: 100, alignment: .trailing)
+            Image(systemName: "arrow.right").font(.caption).foregroundStyle(.secondary)
+            Text(after).monospacedDigit().frame(width: 100, alignment: .leading)
+        }
+    }
+}
+
+enum MetricQuality { case good, warning, neutral }
+
+struct MetricCard: View {
+    var title: String
+    var value: String
+    var quality: MetricQuality
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text(title).font(.caption).foregroundStyle(.secondary)
+            Text(value).font(.title3.weight(.semibold))
+            Spacer(minLength: 0)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(color.opacity(0.13), in: RoundedRectangle(cornerRadius: 12))
+        .overlay(alignment: .topTrailing) { circle }
+    }
+
+    private var color: Color {
+        switch quality {
+        case .good: return .green
+        case .warning: return .orange
+        case .neutral: return .accentColor
+        }
+    }
+
+    private var circle: some View {
+        Circle().fill(color).frame(width: 8, height: 8).padding(10)
+    }
+}
+
+struct DropZone: View {
+    var title: String
+    var subtitle: String
+    var action: (URL) -> Void
+    @State private var isTargeted = false
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "arrow.down.doc").font(.title2)
+            Text(title).font(.headline)
+            Text(subtitle).font(.caption).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, minHeight: 110)
+        .background(
+            RoundedRectangle(cornerRadius: 14)
+                .fill(isTargeted ? Color.accentColor.opacity(0.14) : Color(nsColor: .controlBackgroundColor))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14)
+                        .strokeBorder(isTargeted ? Color.accentColor : Color(nsColor: .separatorColor), style: StrokeStyle(lineWidth: 1.5, dash: [6, 4]))
+                )
+        )
+        .onDrop(of: [.fileURL], isTargeted: $isTargeted) { providers in
+            guard let provider = providers.first else { return false }
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                if let url { DispatchQueue.main.async { action(url) } }
+            }
+            return true
+        }
+    }
+}

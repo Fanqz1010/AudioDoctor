@@ -1,0 +1,116 @@
+# Audio Doctor
+
+![Audio Doctor](docs/assets/audio-doctor-poster.png)
+
+**Audio Doctor** 是一个原生 macOS SwiftUI / AVFoundation 桌面应用，用来给音乐、播客和 AI 生成音频做客观体检、轻量修复、声道转换和空间音频导出。它特别适合快速检查 Suno 等 AI 生成音乐中常见的高频沙沙声、频段偏薄、响度不一致和相位风险。
+
+> 当前版本：**v0.2.0**  
+> 系统要求：**macOS 13+**  
+> 处理方式：本地离线处理，不上传音频
+
+## 核心功能
+
+### 1. 音频体检
+
+拖入 WAV / AIFF / M4A / MP3，查看：
+
+- 综合响度 LUFS
+- 真峰 True Peak
+- 样本峰值 / RMS / 峰值因子
+- 直流偏移
+- 削波与失真风险
+- 相位相关性与立体声宽度
+- 频段能量分布
+- 高频噪声占比
+- 启发式「疑似 AI 感」评分
+
+### 2. AI 音感修复
+
+默认处理链：
+
+1. 高频沙沙声抑制
+2. 低频与身体感补偿
+3. 可选参考曲频响匹配
+4. 空气感与细节增强
+5. 响度标准化
+6. 真峰限制
+
+修复强度可调，默认链路保持保守，避免破坏瞬态和原曲个性。
+
+### 3. 声道与空间音频转换
+
+- 立体声 → 单声道
+- 单声道 → 立体声
+- 立体声 → 5.1 环绕声：`L R C LFE Ls Rs`
+- 立体声 → 一阶 AmbiX：`W Y Z X`，ACN/SN3D
+
+AmbiX 是开源空间音频生态中常用的交换格式，不等同于 Dolby Atmos 母版。
+
+### 4. 导出
+
+- WAV / AIFF
+- 16-bit / 24-bit
+- 多声道输出保留声道布局
+- 空间输出峰值控制在安全范围
+
+## 安装与构建
+
+### 直接使用
+
+1. 下载本地打包的 `AudioDoctor.app.zip`
+2. 解压后双击 `Audio Doctor`
+3. 如 macOS 提示无法验证开发者，右键 App →「打开」→ 再点「打开」
+
+### 从源码构建
+
+本仓库使用 Swift Package 结构。若本机只安装了 Apple Command Line Tools，可以直接编译：
+
+```bash
+SDK=$(xcrun --show-sdk-path)
+swiftc -sdk "$SDK" -O -o build/AudioDoctor Sources/AudioDoctor/*.swift
+```
+
+在完整 Xcode 环境中也可以使用：
+
+```bash
+swift build -c release
+```
+
+## 命令行测试
+
+二进制同时提供轻量测试入口：
+
+```bash
+AudioDoctor analyze input.wav
+AudioDoctor repair input.wav output.wav [reference.wav]
+AudioDoctor convert input.wav output.wav mono
+AudioDoctor convert input.wav output.wav stereo
+AudioDoctor convert input.wav output.wav surround51
+AudioDoctor convert input.wav output.wav ambix
+```
+
+## 设计边界
+
+- 「疑似 AI 感」是透明启发式指标，不是标准听感评分。
+- 空间转换是保守矩阵处理，不会真正分离人声、鼓组或混响分轨。
+- AmbiX 不等于 Dolby Atmos。正式 Atmos 母版需要专用授权工具链与对象/床 metadata。
+- 当前版本面向单文件离线处理，暂不包含批量队列和 DAW 插件。
+
+## 文档
+
+- [中文使用说明](docs/user-guide-zh.md)
+- [开源方案调研](docs/research-zh.md)
+
+## Roadmap
+
+- 频谱图与相位示波器
+- A/B 对比播放
+- 批量处理队列
+- 可选神经网络去噪 / 音频超分
+- 采样率转换与抖动控制
+- MP3 / AAC 导出
+- 高阶 Ambisonics 与双耳渲染预设
+
+## License
+
+MIT License. See [LICENSE](LICENSE).
