@@ -6,3 +6,5 @@ DerivedData/
 *.xcuserdata/
 outputs/
 work/
+__pycache__/
+*.py[cod]
