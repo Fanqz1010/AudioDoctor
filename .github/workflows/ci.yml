@@ -37,3 +37,16 @@ jobs:
           afinfo test-51.wav | grep "6 ch"
           afinfo test-ambi.wav | grep "4 ch"
           python3 scripts/audio_analyzer.py --no-stats test-stereo.wav | grep "44100 Hz"
+          mkdir -p batch-input/nested
+          cp test-stereo.wav batch-input/nested/
+          "$BINARY" batch batch-input batch-output analyze
+          python3 - <<'PY'
+          import csv
+          from pathlib import Path
+          reports = list(Path("batch-output").glob("*.csv"))
+          assert len(reports) == 1, reports
+          with reports[0].open(encoding="utf-8-sig") as handle:
+              rows = list(csv.DictReader(handle))
+          assert len(rows) == 1, rows
+          assert rows[0]["状态"] == "成功"
+          PY
