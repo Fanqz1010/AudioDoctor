@@ -1,5 +1,20 @@
 # Release Notes
 
+## v0.3.0 - 2026-11-05
+
+### Added
+
+- Separate single-file precision workspace and thousand-file batch workspace.
+- Recursive batch scanning and sequential processing queue.
+- Analyze-only batch mode with incremental CSV report writing.
+- Batch repair/export mode with resume-friendly skip-existing behavior.
+- Real-time batch progress, success/failure/skipped counters, and cancellation.
+- Objective annotation dashboard with transparent thresholds and visual indicators.
+- New metrics: channel balance, mono fold-down loss, spatial expansion index, and clipping percentage.
+- Detailed Chinese annotation standards for loudness, true peak, clipping, dynamics, phase, mono compatibility, spatial data, band balance, hiss, and heuristic AI feel.
+- CLI `batch` command.
+- Validated with a recursive 1,000-file batch test.
+
 ## Repository update - 2026-11-05
 
 ### Added

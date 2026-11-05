@@ -8,7 +8,7 @@
 
 **Audio Doctor** 是一个原生 macOS SwiftUI / AVFoundation 桌面应用，用来给音乐、播客和 AI 生成音频做客观体检、轻量修复、声道转换和空间音频导出。它特别适合快速检查 Suno 等 AI 生成音乐中常见的高频沙沙声、频段偏薄、响度不一致和相位风险。
 
-> 当前版本：**v0.2.0**  
+> 当前版本：**v0.3.0**  
 > 系统要求：**macOS 13+**  
 > 处理方式：本地离线处理，不上传音频
 
@@ -50,7 +50,21 @@
 
 AmbiX 是开源空间音频生态中常用的交换格式，不等同于 Dolby Atmos 母版。
 
-### 4. 导出
+### 4. 千级批量标注中心
+
+Audio Doctor 提供独立批量工作台，适合一次处理几十、几百到上千个音频：
+
+- 递归扫描文件夹
+- 只分析并导出 CSV 标注报告，不修改原音频
+- 批量修复并导出 WAV / AIFF
+- 顺序队列处理，降低千级任务内存风险
+- 实时显示成功 / 失败 / 跳过 / 当前文件
+- 中途取消也会保留已完成 CSV 记录
+- 默认跳过已存在输出，可用于续跑
+- 客观等级 A / B / C / D
+- 每条记录包含响度、真峰、削波、动态、相位、左右平衡、单声道折叠损失、空间展开、低频能量、高频噪声和疑似 AI 感
+
+### 5. 导出
 
 - WAV / AIFF
 - 16-bit / 24-bit
@@ -105,6 +119,8 @@ AudioDoctor convert input.wav output.wav mono
 AudioDoctor convert input.wav output.wav stereo
 AudioDoctor convert input.wav output.wav surround51
 AudioDoctor convert input.wav output.wav ambix
+AudioDoctor batch input-folder output-folder analyze
+AudioDoctor batch input-folder output-folder repair [reference.wav]
 ```
 
 ## 设计边界
@@ -112,18 +128,22 @@ AudioDoctor convert input.wav output.wav ambix
 - 「疑似 AI 感」是透明启发式指标，不是标准听感评分。
 - 空间转换是保守矩阵处理，不会真正分离人声、鼓组或混响分轨。
 - AmbiX 不等于 Dolby Atmos。正式 Atmos 母版需要专用授权工具链与对象/床 metadata。
-- 当前版本面向单文件离线处理，暂不包含批量队列和 DAW 插件。
+- 批量第一版使用顺序队列保护内存；尚未提供多线程并发配置和断点数据库。
+- 客观标注标准用于降低主观偏差，不能完全替代最终人工试听。
+- 当前不是 DAW 插件。
 
 ## 文档
 
 - [中文使用说明](docs/user-guide-zh.md)
+- [客观标注标准](docs/annotation-standards-zh.md)
 - [开源方案调研](docs/research-zh.md)
 
 ## Roadmap
 
 - 频谱图与相位示波器
 - A/B 对比播放
-- 批量处理队列
+- 批量任务暂停 / 恢复数据库
+- 多线程并发与队列优先级
 - 可选神经网络去噪 / 音频超分
 - 采样率转换与抖动控制
 - MP3 / AAC 导出

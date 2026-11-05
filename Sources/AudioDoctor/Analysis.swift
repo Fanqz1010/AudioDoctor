@@ -14,6 +14,10 @@ struct AudioAnalysisReport: Codable {
     var clippedSamples: Int
     var stereoCorrelation: Float?
     var stereoWidthPercent: Float?
+    var channelBalanceDb: Float?
+    var monoFoldDownLossDb: Float?
+    var spatialScore: Float?
+    var clippingPercent: Float
     var phaseRisk: String
     var hissRatioDb: Float?
     var spectralFlatness: Float?
@@ -59,9 +63,24 @@ enum AudioAnalyzer {
                 side[i] = (left[i] - right[i]) * 0.5
             }
         }
+        let leftRms = DSP.rms(left)
+        let rightRms = DSP.rms(right)
         let midRms = mono ? DSP.rms(left) : DSP.rms(mid)
         let sideRms = mono ? 0 : DSP.rms(side)
         let width = mono ? 0 : sideRms / max(midRms + sideRms, 1e-9) * 100
+        let channelBalance = mono ? nil : DSP.db(leftRms / max(rightRms, 1e-9))
+        let referenceStereoRms = sqrt((leftRms * leftRms + rightRms * rightRms) / 2)
+        let monoFoldDownLoss = mono ? nil : DSP.db(midRms / max(referenceStereoRms, 1e-9))
+        let phaseSafety: Float
+        if let corr = correlation {
+            if corr >= 0.25 && corr <= 0.90 { phaseSafety = 100 }
+            else if corr > 0.90 { phaseSafety = max(0, 100 - (corr - 0.90) * 250) }
+            else { phaseSafety = max(0, (corr + 0.20) / 0.45 * 100) }
+        } else {
+            phaseSafety = 100
+        }
+        let widthScore = max(0, 100 - abs(width - 40) * 1.8)
+        let spatialScore = mono ? 0 : max(0, min(100, widthScore * 0.65 + phaseSafety * 0.35))
         var phaseRisk = "单声道，无相位风险"
         if let corr = correlation {
             if corr < -0.2 { phaseRisk = "高风险：左右声道明显反相" }
@@ -126,6 +145,10 @@ enum AudioAnalyzer {
             clippedSamples: clipped,
             stereoCorrelation: correlation,
             stereoWidthPercent: mono ? nil : width,
+            channelBalanceDb: channelBalance,
+            monoFoldDownLossDb: monoFoldDownLoss,
+            spatialScore: mono ? nil : spatialScore,
+            clippingPercent: count > 0 ? Float(clipped) / Float(count * channels.count) * 100 : 0,
             phaseRisk: phaseRisk,
             hissRatioDb: hissRatio,
             spectralFlatness: flatness,

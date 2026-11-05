@@ -6,6 +6,40 @@ struct AudioDoctorApp: App {
 
     init() {
         let args = CommandLine.arguments
+        if let index = args.firstIndex(of: "batch"), args.indices.contains(index + 2) {
+            let input = URL(fileURLWithPath: args[index + 1])
+            let output = URL(fileURLWithPath: args[index + 2])
+            let modeName = args.indices.contains(index + 3) ? args[index + 3].lowercased() : "analyze"
+            let reference = args.indices.contains(index + 4) ? URL(fileURLWithPath: args[index + 4]) : nil
+            do {
+                var settings = BatchSettings()
+                settings.mode = BatchMode(rawValue: modeName) ?? .analyze
+                if settings.mode == .repair && reference != nil {
+                    settings.repair.matchReference = true
+                }
+                let cancellation = BatchCancellation()
+                let result = try BatchProcessor.run(
+                    input: input,
+                    output: output,
+                    settings: settings,
+                    referenceURL: reference,
+                    progress: { progress in
+                        FileHandle.standardOutput.write(Data((
+                            String(format: "%d/%d success=%d failed=%d skipped=%d\r",
+                                   progress.completed, progress.total, progress.succeeded, progress.failed, progress.skipped)
+                        ).utf8))
+                    },
+                    cancellation: cancellation
+                )
+                FileHandle.standardOutput.write(Data((
+                    "\nbatch complete: success=\(result.summary.succeeded) failed=\(result.summary.failed) skipped=\(result.summary.skipped) report=\(result.summary.reportURL?.path ?? "")\n"
+                ).utf8))
+                exit(result.summary.failed == 0 ? 0 : 1)
+            } catch {
+                FileHandle.standardError.write(Data((error.localizedDescription + "\n").utf8))
+                exit(1)
+            }
+        }
         if let index = args.firstIndex(of: "analyze"), args.indices.contains(index + 1) {
             let url = URL(fileURLWithPath: args[index + 1])
             do {

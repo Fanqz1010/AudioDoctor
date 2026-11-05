@@ -15,6 +15,132 @@ final class AppModel: ObservableObject {
     @Published var outputFormat = "wav"
     @Published var bitDepth = 24
 
+    // Separate thousand-file batch workspace.
+    @Published var selectedWorkspace = "single"
+    @Published var batchSettings = BatchSettings()
+    @Published var batchInputURL: URL?
+    @Published var batchOutputURL: URL?
+    @Published var batchReferenceURL: URL?
+    @Published var batchFileCount = 0
+    @Published var isScanningBatch = false
+    @Published var isBatchRunning = false
+    @Published var batchProgress = BatchProgress()
+    @Published var batchRecords: [BatchRecord] = []
+    @Published var batchMessage: String?
+    @Published var batchErrorMessage: String?
+    private var batchCancellation: BatchCancellation?
+
+    func loadBatchInput(url: URL) {
+        batchErrorMessage = nil
+        batchMessage = nil
+        isScanningBatch = true
+        batchInputURL = url
+        batchFileCount = 0
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let files = try BatchProcessor.audioFiles(at: url)
+                DispatchQueue.main.async {
+                    self.batchFileCount = files.count
+                    self.isScanningBatch = false
+                    self.batchMessage = files.isEmpty ? "未找到支持的音频文件" : "已找到 \(files.count) 个音频文件"
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.isScanningBatch = false
+                    self.batchErrorMessage = "扫描失败：\(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    func chooseBatchInput() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.message = "选择一个音频文件夹，或选择单个音频文件"
+        if panel.runModal() == .OK, let url = panel.url {
+            loadBatchInput(url: url)
+        }
+    }
+
+    func chooseBatchOutput() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.message = "选择批量报告和导出音频的文件夹"
+        if panel.runModal() == .OK, let url = panel.url {
+            batchOutputURL = url
+        }
+    }
+
+    func chooseBatchReference() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.audio]
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        if panel.runModal() == .OK, let url = panel.url {
+            batchReferenceURL = url
+            batchMessage = "批量参考曲已选择：\(url.lastPathComponent)"
+        }
+    }
+
+    func startBatch() {
+        guard let input = batchInputURL, let output = batchOutputURL else {
+            batchErrorMessage = "请先选择批量输入和输出文件夹"
+            return
+        }
+        guard !isBatchRunning else { return }
+        let settings = batchSettings
+        let reference = batchReferenceURL
+        let cancellation = BatchCancellation()
+        batchCancellation = cancellation
+        isBatchRunning = true
+        batchErrorMessage = nil
+        batchMessage = nil
+        batchRecords = []
+        batchProgress = BatchProgress(total: batchFileCount, startedAt: Date())
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let result = try BatchProcessor.run(
+                    input: input,
+                    output: output,
+                    settings: settings,
+                    referenceURL: reference,
+                    progress: { progress in
+                        DispatchQueue.main.async {
+                            self.batchProgress = progress
+                        }
+                    },
+                    cancellation: cancellation
+                )
+                DispatchQueue.main.async {
+                    self.batchRecords = result.records
+                    var finalProgress = self.batchProgress
+                    finalProgress.reportURL = result.summary.reportURL
+                    finalProgress.finishedAt = Date()
+                    self.batchProgress = finalProgress
+                    self.isBatchRunning = false
+                    self.batchMessage = result.summary.cancelled
+                        ? "批量处理已取消：成功 \(result.summary.succeeded)，失败 \(result.summary.failed)，跳过 \(result.summary.skipped)"
+                        : "批量处理完成：成功 \(result.summary.succeeded)，失败 \(result.summary.failed)，跳过 \(result.summary.skipped)"
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.isBatchRunning = false
+                    self.batchErrorMessage = "批量处理失败：\(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    func cancelBatch() {
+        batchCancellation?.cancel()
+        batchMessage = "正在取消，当前文件完成后会停止"
+    }
+
     func loadFile(url: URL) {
         errorMessage = nil
         message = nil
@@ -132,15 +258,25 @@ struct ContentView: View {
             header
             Divider()
             if model.isWorking { ProgressView("正在分析音频…").padding() }
-            HStack(alignment: .top, spacing: 20) {
-                controls
-                if let report = model.report {
-                    ScrollView { analysis(report) }
-                } else {
-                    emptyState
+            if model.selectedWorkspace == "batch" {
+                BatchWorkspaceView()
+                    .padding(20)
+            } else {
+                HStack(alignment: .top, spacing: 20) {
+                    controls
+                    if let report = model.report {
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 18) {
+                                AnnotationDashboard(report: report)
+                                analysis(report)
+                            }
+                        }
+                    } else {
+                        emptyState
+                    }
                 }
+                .padding(20)
             }
-            .padding(20)
         }
         .background(Color(nsColor: .windowBackgroundColor))
     }
@@ -150,11 +286,17 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text("Audio Doctor 音频体检与修复")
                     .font(.title2.weight(.semibold))
-                    Text("v0.2 · 拖入音频 → 客观体检 → 一键转换 / 修复 / 导出")
+                    Text("v0.3 · 单文件精修 / 千级批量标注中心")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
             Spacer()
+            Picker("工作台", selection: $model.selectedWorkspace) {
+                Text("单文件精修").tag("single")
+                Text("批量标注中心").tag("batch")
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 230)
             if model.isWorking { ProgressView().controlSize(.small) }
         }
         .padding(20)
