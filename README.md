@@ -80,6 +80,20 @@ swiftc -sdk "$SDK" -O -o build/AudioDoctor Sources/AudioDoctor/*.swift
 swift build -c release
 ```
 
+## 轻量 Python 分析脚本
+
+如果只需要快速查看基础参数，可以使用仓库自带的 Python 脚本：
+
+```bash
+python3 scripts/audio_analyzer.py input.wav
+python3 scripts/audio_analyzer.py /path/to/folder
+python3 scripts/audio_analyzer.py --no-stats input.wav
+```
+
+WAV 解析不需要第三方依赖，支持 8/16/24/32-bit PCM、文件批量扫描、峰值、RMS 电平和平均绝对值。安装 `soundfile` 后可扩展解析 MP3、FLAC、OGG、OPUS、AIFF 等格式。详见 [scripts README](scripts/README.md)。
+
+> 这个脚本只做基础参数和电平统计；LUFS、真峰、相位、频段分析、修复和空间音频转换请使用 Audio Doctor 主程序。
+
 ## 命令行测试
 
 二进制同时提供轻量测试入口：

@@ -36,3 +36,4 @@ jobs:
           "$BINARY" convert test-stereo.wav test-ambi.wav ambix
           afinfo test-51.wav | grep "6 ch"
           afinfo test-ambi.wav | grep "4 ch"
+          python3 scripts/audio_analyzer.py --no-stats test-stereo.wav | grep "44100 Hz"

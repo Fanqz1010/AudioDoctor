@@ -1,5 +1,13 @@
 # Release Notes
 
+## Repository update - 2026-11-05
+
+### Added
+
+- Lightweight Python companion CLI for metadata, peak, RMS level, and mean absolute value.
+- Dependency-free WAV parsing, including 8/16/24/32-bit PCM and recursive folder analysis.
+- Optional `soundfile` support for additional formats.
+
 ## v0.2.0 - 2026-11-05
 
 ### Added
