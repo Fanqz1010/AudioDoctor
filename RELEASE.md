@@ -1,5 +1,24 @@
 # Release Notes
 
+## v0.4.0 - 2026-11-05
+
+### Added
+
+- Three-workspace product structure: AI artifact precision repair, batch badcase annotation, and content-aware optimization.
+- Seven transparent artifact indicators: hiss, shimmer/metallic feeling, spectral holes, thinness, phase instability, transient smear, and stereo anomaly.
+- Time-based badcase localization with start/end seconds, issue type, severity, evidence, confidence, and suggested fix.
+- Batch HTML summary reports with grade distribution, concentrated issue ranking, worst-file priority list, and batch recommendations.
+- Content presets for general music, Suno vocal, Suno pop, electronic, cinematic, and podcast material.
+- Low-frequency mono stabilization and envelope-following transient recovery.
+- More detailed CSV columns for all artifact dimensions and localized issues.
+- Regression coverage for analysis, repair, 5.1/AmbiX conversion, recursive batches, resume-friendly skipping, and a 1,000-file batch.
+
+### Changed
+
+- The high-frequency exciter is attenuated when repaired output still has excessive high-band noise.
+- Single-file analysis now shows a dedicated seven-dimension artifact dashboard and time-axis badcase list.
+- Batch reports preserve the original annotation metrics while adding artifact diagnostics and aggregate conclusions.
+
 ## v0.3.0 - 2026-11-05
 
 ### Added

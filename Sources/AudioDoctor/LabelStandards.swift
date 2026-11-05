@@ -238,6 +238,50 @@ enum LabelStandards {
             ))
         }
 
+        if let artifacts = report.artifactScores {
+            func artifactCriterion(name: String, value: Float, meaning: String) -> LabelCriterion {
+                let level: LabelLevel = value <= 45 ? .pass : (value <= 70 ? .review : .fail)
+                return LabelCriterion(
+                    name: name,
+                    category: "AI 伪影拆解",
+                    value: String(format: "%.0f / 100", value),
+                    standard: "≤45 通过；45～70 复核；>70 异常",
+                    interpretation: meaning,
+                    level: level,
+                    score: 100 - value
+                )
+            }
+            criteria.append(artifactCriterion(name: "高频沙声伪影", value: artifacts.hiss, meaning: "衡量 9kHz 以上能量占比；高分提示沙沙声或稳态噪声感。"))
+            criteria.append(artifactCriterion(name: "金属感 / 闪烁感", value: artifacts.shimmer, meaning: "由高频能量与频谱平坦度估计；高分提示高频发硬、发金属。"))
+            criteria.append(artifactCriterion(name: "频谱空洞", value: artifacts.spectralHole, meaning: "检查相邻频带是否明显低于局部中位数；高分提示频段缺洞。"))
+            criteria.append(artifactCriterion(name: "频段偏薄", value: artifacts.thinness, meaning: "低频身体感不足时得分升高；可结合参考曲确认。"))
+            criteria.append(artifactCriterion(name: "相位不稳定", value: artifacts.phaseInstability, meaning: "衡量分窗相位相关性波动和低相关窗口；高分提示空间不稳定。"))
+            criteria.append(artifactCriterion(name: "瞬态模糊", value: artifacts.transientSmear, meaning: "由包络攻击变化估计；高分提示鼓点/辅音边界发糊。"))
+            criteria.append(artifactCriterion(name: "立体声异常", value: artifacts.stereoAnomaly, meaning: "综合左右平衡、单声道折叠损失和低相关风险。"))
+            criteria.append(artifactCriterion(name: "AI 伪影总分", value: artifacts.overall, meaning: "七项伪影加权总分；用于排序复核，不用于判断来源或规避检测。"))
+        }
+
+        if !report.issueIntervals.isEmpty {
+            let high = report.issueIntervals.filter { $0.severity == "高" }.count
+            let medium = report.issueIntervals.filter { $0.severity == "中" }.count
+            let level: LabelLevel = high > 0 ? .fail : (medium > 1 ? .review : .pass)
+            let value: String = "高 " + String(high) + " / 中 " + String(medium)
+            let interpretation: String = "已在时间轴定位可疑区间，标注员可优先跳转试听，不需要整首反复搜索。"
+            let highPenalty: Float = Float(high) * 35.0
+            let mediumPenalty: Float = Float(medium) * 12.0
+            let score: Float = max(0.0, 100.0 - highPenalty - mediumPenalty)
+            let criterion = LabelCriterion(
+                name: "时间轴 Badcase",
+                category: "定位",
+                value: value,
+                standard: "存在高严重度窗口判异常；≥2 个中严重度窗口判复核",
+                interpretation: interpretation,
+                level: level,
+                score: score
+            )
+            criteria.append(criterion)
+        }
+
         let failCount = criteria.filter { $0.level == .fail }.count
         let reviewCount = criteria.filter { $0.level == .review }.count
         let grade: String

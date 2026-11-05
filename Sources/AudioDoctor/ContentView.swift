@@ -26,6 +26,8 @@ final class AppModel: ObservableObject {
     @Published var isBatchRunning = false
     @Published var batchProgress = BatchProgress()
     @Published var batchRecords: [BatchRecord] = []
+    @Published var batchAggregate: BatchAggregate?
+    @Published var batchHTMLReportURL: URL?
     @Published var batchMessage: String?
     @Published var batchErrorMessage: String?
     private var batchCancellation: BatchCancellation?
@@ -118,6 +120,8 @@ final class AppModel: ObservableObject {
                 )
                 DispatchQueue.main.async {
                     self.batchRecords = result.records
+                    self.batchAggregate = result.summary.aggregate
+                    self.batchHTMLReportURL = result.summary.htmlReportURL
                     var finalProgress = self.batchProgress
                     finalProgress.reportURL = result.summary.reportURL
                     finalProgress.finishedAt = Date()
@@ -258,16 +262,22 @@ struct ContentView: View {
             header
             Divider()
             if model.isWorking { ProgressView("正在分析音频…").padding() }
-            if model.selectedWorkspace == "batch" {
+            switch model.selectedWorkspace {
+            case "batch":
                 BatchWorkspaceView()
                     .padding(20)
-            } else {
+            case "content":
+                ContentOptimizationWorkspaceView()
+                    .padding(20)
+            default:
                 HStack(alignment: .top, spacing: 20) {
                     controls
                     if let report = model.report {
                         ScrollView {
                             VStack(alignment: .leading, spacing: 18) {
                                 AnnotationDashboard(report: report)
+                                artifactDashboard(report)
+                                issueTimeline(report)
                                 analysis(report)
                             }
                         }
@@ -286,17 +296,18 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text("Audio Doctor 音频体检与修复")
                     .font(.title2.weight(.semibold))
-                    Text("v0.3 · 单文件精修 / 千级批量标注中心")
+                    Text("v0.4 · AI 伪影精修 / 批量 Badcase 定位 / 内容优化")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
             Spacer()
             Picker("工作台", selection: $model.selectedWorkspace) {
-                Text("单文件精修").tag("single")
-                Text("批量标注中心").tag("batch")
+                Text("AI 伪影精修").tag("single")
+                Text("批量体检标注").tag("batch")
+                Text("内容优化导出").tag("content")
             }
             .pickerStyle(.segmented)
-            .frame(width: 230)
+            .frame(width: 340)
             if model.isWorking { ProgressView().controlSize(.small) }
         }
         .padding(20)
@@ -332,11 +343,24 @@ struct ContentView: View {
                         .foregroundStyle(.orange)
                 }
             }
-            GroupBox("AI 音感修复") {
-                Toggle("去高频沙沙声", isOn: $model.repair.deHiss)
+            GroupBox("AI 伪影修复策略") {
+                Group {
+                Picker("内容预设", selection: $model.repair.presetRawValue) {
+                    ForEach(ContentPreset.allCases) { preset in
+                        Text(preset.title).tag(preset.rawValue)
+                    }
+                }
+                Text(model.repair.preset.summary)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Toggle("去高频沙沙声 / 稳态伪影", isOn: $model.repair.deHiss)
                 Toggle("补足低频与身体感", isOn: $model.repair.fullness)
                 Toggle("使用参考曲频响匹配", isOn: $model.repair.matchReference)
                     .disabled(model.referenceURL == nil)
+                }
+                Group {
+                Toggle("低频单声道化，改善相位兼容", isOn: $model.repair.lowFrequencyMono)
+                Toggle("瞬态恢复，减少鼓点/辅音发糊", isOn: $model.repair.transientRecovery)
                 Toggle("增加细节与空气感", isOn: $model.repair.exciter)
                 Toggle("响度标准化", isOn: $model.repair.loudnessNormalize)
                 HStack {
@@ -352,6 +376,7 @@ struct ContentView: View {
                     Text(String(format: "%.1f", model.repair.strength))
                         .monospacedDigit()
                         .frame(width: 30)
+                }
                 }
             }
             GroupBox("导出") {
@@ -499,6 +524,92 @@ struct ContentView: View {
         return .neutral
     }
 
+    private func artifactDashboard(_ report: AudioAnalysisReport) -> some View {
+        GroupBox("AI 伪影七维拆解") {
+            VStack(alignment: .leading, spacing: 12) {
+                if let scores = report.artifactScores {
+                    HStack(alignment: .center) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("AI 伪影总分").font(.caption).foregroundStyle(.secondary)
+                            Text(String(format: "%.0f / 100", scores.overall)).font(.title2.weight(.semibold))
+                        }
+                        Spacer()
+                        Text("仅表示可听质量风险，不判断来源，也不能用于规避检测")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.trailing)
+                    }
+                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+                        ArtifactScoreCard(title: "沙声", score: scores.hiss, detail: "9kHz 以上占比")
+                        ArtifactScoreCard(title: "金属闪烁", score: scores.shimmer, detail: "高频能量/平坦度")
+                        ArtifactScoreCard(title: "频谱空洞", score: scores.spectralHole, detail: "局部缺频")
+                        ArtifactScoreCard(title: "偏薄", score: scores.thinness, detail: "20–350Hz")
+                        ArtifactScoreCard(title: "相位不稳", score: scores.phaseInstability, detail: "分窗相关")
+                        ArtifactScoreCard(title: "瞬态模糊", score: scores.transientSmear, detail: "包络攻击")
+                        ArtifactScoreCard(title: "立体声异常", score: scores.stereoAnomaly, detail: "平衡/折叠/相关")
+                    }
+                }
+            }
+        }
+    }
+
+    private func issueTimeline(_ report: AudioAnalysisReport) -> some View {
+        GroupBox("时间轴 Badcase 定位") {
+            VStack(alignment: .leading, spacing: 10) {
+                if report.issueIntervals.isEmpty {
+                    Text("未发现需要优先复核的时间窗口。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("标注员可先试听以下区间；严重度只代表客观风险，不等于最终听感结论。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    ForEach(report.issueIntervals.prefix(30)) { interval in
+                        HStack(alignment: .top, spacing: 10) {
+                            Text(timeRange(interval))
+                                .font(.caption.monospacedDigit())
+                                .frame(width: 108, alignment: .leading)
+                            Text(interval.severity)
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(severityColor(interval.severity))
+                                .frame(width: 26)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(interval.issue).font(.caption.weight(.semibold))
+                                Text("\(interval.evidence) · 建议：\(interval.suggestedFix)")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            Spacer()
+                            Text(String(format: "%.0f%%", interval.confidence * 100))
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(8)
+                        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+                    }
+                    if report.issueIntervals.count > 30 {
+                        Text("其余 \(report.issueIntervals.count - 30) 个区间见完整分析 JSON / 批量 HTML 报告。")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+    }
+
+    private func timeRange(_ interval: IssueInterval) -> String {
+        String(format: "%.1f – %.1f 秒", interval.startTime, interval.endTime)
+    }
+
+    private func severityColor(_ severity: String) -> Color {
+        switch severity {
+        case "高": return .red
+        case "中": return .orange
+        default: return .secondary
+        }
+    }
+
     private func comparisonRow(_ name: String, before: String, after: String) -> some View {
         HStack {
             Text(name).frame(width: 110, alignment: .leading)
@@ -538,6 +649,30 @@ struct MetricCard: View {
 
     private var circle: some View {
         Circle().fill(color).frame(width: 8, height: 8).padding(10)
+    }
+}
+
+struct ArtifactScoreCard: View {
+    let title: String
+    let score: Float
+    let detail: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(title).font(.caption.weight(.semibold))
+                Spacer()
+                Text(String(format: "%.0f", score)).font(.caption.monospacedDigit()).foregroundStyle(color)
+            }
+            ProgressView(value: Double(score) / 100).tint(color)
+            Text(detail).font(.caption2).foregroundStyle(.secondary)
+        }
+        .padding(9)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 9))
+    }
+
+    private var color: Color {
+        score <= 45 ? .green : (score <= 70 ? .orange : .red)
     }
 }
 

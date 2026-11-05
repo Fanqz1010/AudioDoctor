@@ -49,4 +49,8 @@ jobs:
               rows = list(csv.DictReader(handle))
           assert len(rows) == 1, rows
           assert rows[0]["状态"] == "成功"
+          assert rows[0]["AI伪影总分"], rows[0]
+          html_reports = list(Path("batch-output").glob("*.html"))
+          assert len(html_reports) == 1, html_reports
+          assert "<h1>批量音频体检报告</h1>" in html_reports[0].read_text(encoding="utf-8")
           PY

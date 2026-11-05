@@ -70,11 +70,24 @@ struct BatchWorkspaceView: View {
                     .pickerStyle(.radioGroup)
 
                     if model.batchSettings.mode == .repair {
+                        Group {
                         Divider()
-                        Toggle("去高频沙沙声", isOn: $model.batchSettings.repair.deHiss)
+                        Picker("内容预设", selection: $model.batchSettings.repair.presetRawValue) {
+                            ForEach(ContentPreset.allCases) { preset in
+                                Text(preset.title).tag(preset.rawValue)
+                            }
+                        }
+                        Text(model.batchSettings.repair.preset.summary)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        Toggle("去高频沙沙声 / 稳态伪影", isOn: $model.batchSettings.repair.deHiss)
                         Toggle("补足低频与身体感", isOn: $model.batchSettings.repair.fullness)
                         Toggle("使用参考曲频响匹配", isOn: $model.batchSettings.repair.matchReference)
                             .disabled(model.batchReferenceURL == nil)
+                        }
+                        Group {
+                        Toggle("低频单声道化", isOn: $model.batchSettings.repair.lowFrequencyMono)
+                        Toggle("瞬态恢复", isOn: $model.batchSettings.repair.transientRecovery)
                         Toggle("增加细节与空气感", isOn: $model.batchSettings.repair.exciter)
                         Toggle("响度标准化", isOn: $model.batchSettings.repair.loudnessNormalize)
                         HStack {
@@ -99,6 +112,7 @@ struct BatchWorkspaceView: View {
                                 systemImage: "music.note.list"
                             )
                             .lineLimit(1)
+                        }
                         }
                     } else {
                         Text("只生成客观标注报告，不修改、不导出音频；适合千级文件快速体检。")
@@ -196,7 +210,14 @@ struct BatchWorkspaceView: View {
                     if let report = model.batchProgress.reportURL {
                         pathRow("CSV 报告", report)
                     }
+                    if let report = model.batchHTMLReportURL {
+                        pathRow("HTML 总结报告", report)
+                    }
                 }
+            }
+
+            if let aggregate = model.batchAggregate {
+                BatchAggregateSummaryView(aggregate: aggregate)
             }
 
             HStack(alignment: .top, spacing: 12) {
@@ -252,6 +273,75 @@ struct BatchWorkspaceView: View {
                 .truncationMode(.middle)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+struct BatchAggregateSummaryView: View {
+    let aggregate: BatchAggregate
+
+    var body: some View {
+        GroupBox("批量总结与 Badcase 定位") {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .top, spacing: 12) {
+                    ForEach(["A", "B", "C", "D"], id: \.self) { grade in
+                        BatchSummaryCard(
+                            title: "\(grade) 级",
+                            value: "\(aggregate.gradeCounts[grade, default: 0])",
+                            color: gradeColor(grade)
+                        )
+                    }
+                }
+
+                HStack(alignment: .top, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("集中问题").font(.headline)
+                        if aggregate.issueCounts.isEmpty {
+                            Text("未发现集中异常").font(.caption).foregroundStyle(.secondary)
+                        }
+                        ForEach(aggregate.issueCounts.prefix(6)) { issue in
+                            HStack {
+                                Text(issue.name).font(.caption).lineLimit(1)
+                                Spacer()
+                                Text("\(issue.count)").font(.caption.monospacedDigit())
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("优先复核文件").font(.headline)
+                        if aggregate.worstFiles.isEmpty {
+                            Text("无高风险文件").font(.caption).foregroundStyle(.secondary)
+                        }
+                        ForEach(aggregate.worstFiles.prefix(8)) { file in
+                            HStack {
+                                Text(file.fileName).font(.caption).lineLimit(1)
+                                Spacer()
+                                Text(file.grade).font(.caption.weight(.semibold))
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("批次处理建议").font(.headline)
+                    ForEach(aggregate.recommendations, id: \.self) { recommendation in
+                        Label(recommendation, systemImage: "checkmark.seal")
+                            .font(.caption)
+                    }
+                }
+            }
+        }
+    }
+
+    private func gradeColor(_ grade: String) -> Color {
+        switch grade {
+        case "A": return .green
+        case "B": return .accentColor
+        case "C": return .orange
+        default: return .red
+        }
     }
 }
 
@@ -385,6 +475,25 @@ struct BatchRecordDetail: View {
                 level: ai > 65 ? .fail : (ai > 35 ? .review : .pass)
             ))
         }
+        if let score = record.artifactOverall {
+            values.append(BatchMetricDisplay(
+                name: "AI 伪影总分", value: String(format: "%.0f / 100", score),
+                standard: "≤ 45", score: 100 - score,
+                level: score > 70 ? .fail : (score > 45 ? .review : .pass)
+            ))
+        }
+        if let score = record.artifactHiss {
+            values.append(BatchMetricDisplay(name: "沙声伪影", value: String(format: "%.0f", score), standard: "≤ 45", score: 100 - score, level: score > 70 ? .fail : (score > 45 ? .review : .pass)))
+        }
+        if let score = record.artifactShimmer {
+            values.append(BatchMetricDisplay(name: "金属闪烁", value: String(format: "%.0f", score), standard: "≤ 45", score: 100 - score, level: score > 70 ? .fail : (score > 45 ? .review : .pass)))
+        }
+        if let score = record.artifactSpectralHole {
+            values.append(BatchMetricDisplay(name: "频谱空洞", value: String(format: "%.0f", score), standard: "≤ 45", score: 100 - score, level: score > 70 ? .fail : (score > 45 ? .review : .pass)))
+        }
+        if let score = record.artifactTransientSmear {
+            values.append(BatchMetricDisplay(name: "瞬态模糊", value: String(format: "%.0f", score), standard: "≤ 45", score: 100 - score, level: score > 70 ? .fail : (score > 45 ? .review : .pass)))
+        }
         return values
     }
 
@@ -421,6 +530,33 @@ struct BatchRecordDetail: View {
                 Text("建议复核：\(record.reviewChecks.joined(separator: "、"))")
                     .font(.caption)
                     .foregroundStyle(.orange)
+            }
+            if !record.issueIntervals.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("时间轴 Badcase 定位")
+                        .font(.caption.weight(.semibold))
+                    ForEach(record.issueIntervals.prefix(12)) { interval in
+                        HStack(alignment: .top, spacing: 8) {
+                            Text(String(format: "%.1f-%.1fs", interval.startTime, interval.endTime))
+                                .font(.caption2.monospacedDigit())
+                                .frame(width: 88, alignment: .leading)
+                            Text(interval.severity)
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(interval.severity == "高" ? .red : (interval.severity == "中" ? .orange : .secondary))
+                                .frame(width: 24)
+                            Text("\(interval.issue)：\(interval.evidence)。建议：\(interval.suggestedFix)")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    if record.issueIntervals.count > 12 {
+                        Text("另有 \(record.issueIntervals.count - 12) 个窗口，详见 HTML 报告。")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.top, 4)
             }
         }
     }

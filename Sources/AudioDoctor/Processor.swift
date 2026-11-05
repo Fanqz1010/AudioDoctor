@@ -1,13 +1,131 @@
+import Accelerate
 import Foundation
+
+enum ContentPreset: String, CaseIterable, Identifiable, Codable {
+    case general
+    case sunoVocal = "suno-vocal"
+    case sunoPop = "suno-pop"
+    case electronic
+    case cinematic
+    case podcast
+
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .general: return "通用音乐"
+        case .sunoVocal: return "Suno 人声"
+        case .sunoPop: return "Suno 流行"
+        case .electronic: return "电子 / 舞曲"
+        case .cinematic: return "影视 / 配乐"
+        case .podcast: return "播客 / 口播"
+        }
+    }
+
+    var summary: String {
+        switch self {
+        case .general: return "保守修复薄、沙、糊，适合没有明确风格参考的音频。"
+        case .sunoVocal: return "压少一些高频闪烁，保留人声清晰度和轻微空气感。"
+        case .sunoPop: return "补低频身体感和鼓组瞬态，让生成音乐更像成品流行曲。"
+        case .electronic: return "强化低频稳定度与节奏攻击力，避免高频金属感。"
+        case .cinematic: return "保持宽空间，低频更干净，瞬态不做过度强调。"
+        case .podcast: return "以可懂度和相位兼容为主，处理沙声与近讲单薄感。"
+        }
+    }
+
+    var lowGain: Float {
+        switch self {
+        case .general: return 2.0
+        case .sunoVocal: return 1.2
+        case .sunoPop: return 2.0
+        case .electronic: return 1.8
+        case .cinematic: return 1.4
+        case .podcast: return 0.7
+        }
+    }
+
+    var midGain: Float {
+        switch self {
+        case .general: return 0.5
+        case .sunoVocal: return 0.8
+        case .sunoPop: return 0.6
+        case .electronic: return 0.3
+        case .cinematic: return 0.4
+        case .podcast: return 0.8
+        }
+    }
+
+    var highMidGain: Float {
+        switch self {
+        case .general: return -0.4
+        case .sunoVocal: return 0.5
+        case .sunoPop: return 0.2
+        case .electronic: return -0.2
+        case .cinematic: return -0.3
+        case .podcast: return 0.5
+        }
+    }
+
+    var airGain: Float {
+        switch self {
+        case .general: return 1.3
+        case .sunoVocal: return 1.1
+        case .sunoPop: return 1.5
+        case .electronic: return 1.0
+        case .cinematic: return 0.8
+        case .podcast: return 0.5
+        }
+    }
+
+    var transientAmount: Float {
+        switch self {
+        case .general: return 0.55
+        case .sunoVocal: return 0.45
+        case .sunoPop: return 0.75
+        case .electronic: return 0.80
+        case .cinematic: return 0.45
+        case .podcast: return 0.25
+        }
+    }
+
+    var lowMonoAmount: Float {
+        switch self {
+        case .general: return 0.32
+        case .sunoVocal: return 0.42
+        case .sunoPop: return 0.40
+        case .electronic: return 0.58
+        case .cinematic: return 0.25
+        case .podcast: return 0.70
+        }
+    }
+
+    var deHissCutoff: Float { 7000 + Float(600) }
+    var deHissAmount: Float {
+        switch self {
+        case .general: return 1.0
+        case .sunoVocal: return 1.08
+        case .sunoPop: return 0.95
+        case .electronic: return 0.90
+        case .cinematic: return 0.82
+        case .podcast: return 1.15
+        }
+    }
+}
 
 struct RepairOptions {
     var deHiss = true
     var fullness = true
     var matchReference = true
     var exciter = true
+    var transientRecovery = true
+    var lowFrequencyMono = true
     var loudnessNormalize = true
     var targetLUFS: Float = -14
     var strength: Float = 1.0
+    var presetRawValue = ContentPreset.general.rawValue
+
+    var preset: ContentPreset {
+        ContentPreset(rawValue: presetRawValue) ?? .general
+    }
 }
 
 enum AudioProcessor {
@@ -36,28 +154,56 @@ enum AudioProcessor {
     static func repair(channels: [[Float]], sampleRate: Float, options: RepairOptions, referenceChannels: [[Float]]? = nil) -> [[Float]] {
         var output = channels
         let strength = max(0, min(1.5, options.strength))
+        let preset = options.preset
 
+        // 1. Reduce stationary high-band artifacts before adding brightness.
         if options.deHiss {
-            output = deHiss(output, sampleRate: sampleRate, strength: strength)
+            output = deHiss(output, sampleRate: sampleRate, strength: strength, preset: preset)
         }
+
+        // 2. Restore tonal balance. A user reference wins over a generic preset,
+        //    but both remain limited to conservative corrections.
         if options.fullness {
             if let referenceChannels, options.matchReference {
                 output = matchReferenceBands(output, reference: referenceChannels, sampleRate: sampleRate, strength: strength)
             } else {
-                output = addFullness(output, sampleRate: sampleRate, strength: strength)
+                output = addFullness(output, sampleRate: sampleRate, strength: strength, preset: preset)
             }
         }
-        if options.exciter {
-            output = addAirAndDetail(output, sampleRate: sampleRate, strength: strength)
+
+        // 3. Improve mono compatibility before widening/detail enhancement.
+        if options.lowFrequencyMono, output.count > 1 {
+            output = stabilizeLowFrequency(output, sampleRate: sampleRate, strength: strength, preset: preset)
         }
+
+        // 4. Recover attacks without changing overall level as much as a compressor.
+        if options.transientRecovery {
+            output = recoverTransients(output, sampleRate: sampleRate, strength: strength, preset: preset)
+        }
+
+        if options.exciter {
+            // Do not re-amplify a still-noisy high band. This avoids the common
+            // one-click failure mode where de-hiss is followed by an exciter.
+            let repairedSpectrum = DSP.averageSpectrum(channels: output, sampleRate: sampleRate, maxFrames: 120)
+            var airStrength = strength
+            if !repairedSpectrum.isEmpty {
+                let totalPower: Float = repairedSpectrum.map { pow(10, $0.powerDb / 10) }.reduce(0, +)
+                let highPower: Float = repairedSpectrum.filter { $0.frequency >= 9000 }
+                    .map { pow(10, $0.powerDb / 10) }
+                    .reduce(0, +)
+                if totalPower > 0 {
+                    let highRatio = DSP.db(sqrt(highPower / totalPower))
+                    if highRatio > -14 { airStrength = min(airStrength, strength * 0.18) }
+                }
+            }
+            output = addAirAndDetail(output, sampleRate: sampleRate, strength: airStrength, preset: preset)
+        }
+
         if options.loudnessNormalize, let lufs = DSP.kWeightedLUFS(channels: output, sampleRate: sampleRate) {
             let gainDb = options.targetLUFS - lufs
-            let gain = pow(10, gainDb / 20)
-            DSP.applyGain(&output, gain: gain)
-            DSP.limit(&output, sampleRate: sampleRate, ceiling: pow(10, -1 / 20))
-        } else {
-            DSP.limit(&output, sampleRate: sampleRate, ceiling: pow(10, -1 / 20))
+            DSP.applyGain(&output, gain: pow(10, gainDb / 20))
         }
+        DSP.limit(&output, sampleRate: sampleRate, ceiling: pow(10, -1 / 20))
         return output
     }
 
@@ -171,8 +317,8 @@ enum AudioProcessor {
         }
     }
 
-    private static func deHiss(_ channels: [[Float]], sampleRate: Float, strength: Float) -> [[Float]] {
-        let cutoff = min(8500, sampleRate / 2 - 100)
+    private static func deHiss(_ channels: [[Float]], sampleRate: Float, strength: Float, preset: ContentPreset) -> [[Float]] {
+        let cutoff = min(preset.deHissCutoff, sampleRate / 2 - 100)
         guard cutoff > 100 else { return channels }
         let high = Biquad(BiquadCoefficients.highPass(sampleRate: sampleRate, frequency: cutoff, q: 0.6))
         let low = Biquad(BiquadCoefficients.lowPass(sampleRate: sampleRate, frequency: cutoff, q: 0.6))
@@ -194,7 +340,7 @@ enum AudioProcessor {
             for i in 1..<smoothed.count { smoothed[i] = a * smoothed[i-1] + (1-a) * smoothed[i] }
             let sortedEnvelope = smoothed.sorted()
             let threshold = sortedEnvelope[Int(Double(sortedEnvelope.count) * 0.45)] * 1.6
-            var reductionDb = -7.0 * strength
+            var reductionDb = -7.0 * strength * preset.deHissAmount
             for i in 0..<highBand.count {
                 let ratio = smoothed[i] / max(threshold, 1e-8)
                 let attenuation = ratio < 1 ? max(reductionDb, reductionDb * ratio) : 0
@@ -208,9 +354,12 @@ enum AudioProcessor {
         return output
     }
 
-    private static func addFullness(_ channels: [[Float]], sampleRate: Float, strength: Float) -> [[Float]] {
+    private static func addFullness(_ channels: [[Float]], sampleRate: Float, strength: Float, preset: ContentPreset) -> [[Float]] {
         let eqs: [(Float, Float, Float, Float)] = [
-            (55, 2.2, 0.7, 1), (105, 1.4, 0.7, 1), (260, 0.7, 0.8, 1), (3200, -0.8, 1.0, 1)
+            (55, preset.lowGain, 0.7, 1),
+            (105, preset.lowGain * 0.65, 0.7, 1),
+            (260, preset.midGain, 0.8, 1),
+            (3200, preset.highMidGain, 1.0, 1)
         ]
         var output: [[Float]] = []
         for channel in channels {
@@ -222,6 +371,62 @@ enum AudioProcessor {
                 y = shelf.process(y)
             }
             output.append(y)
+        }
+        return output
+    }
+
+    /// Keep the low end phase-coherent. This directly reduces mono fold-down cancellation
+    /// and the unstable bass image common in generated stereo mixes.
+    private static func stabilizeLowFrequency(_ channels: [[Float]], sampleRate: Float, strength: Float, preset: ContentPreset) -> [[Float]] {
+        guard channels.count > 1 else { return channels }
+        let cutoff: Float = 125
+        let amount = max(0, min(0.85, preset.lowMonoAmount * min(1.2, strength)))
+        let leftLowFilter = Biquad(BiquadCoefficients.lowPass(sampleRate: sampleRate, frequency: cutoff, q: 0.62))
+        let rightLowFilter = Biquad(BiquadCoefficients.lowPass(sampleRate: sampleRate, frequency: cutoff, q: 0.62))
+        let leftHighFilter = Biquad(BiquadCoefficients.highPass(sampleRate: sampleRate, frequency: cutoff, q: 0.62))
+        let rightHighFilter = Biquad(BiquadCoefficients.highPass(sampleRate: sampleRate, frequency: cutoff, q: 0.62))
+        let count = min(channels[0].count, channels[1].count)
+        var leftLow = leftLowFilter.process(Array(channels[0].prefix(count)))
+        var rightLow = rightLowFilter.process(Array(channels[1].prefix(count)))
+        let leftHigh = leftHighFilter.process(Array(channels[0].prefix(count)))
+        let rightHigh = rightHighFilter.process(Array(channels[1].prefix(count)))
+        for i in 0..<count {
+            let lowMid = (leftLow[i] + rightLow[i]) * 0.5
+            leftLow[i] = leftLow[i] * (1 - amount) + lowMid * amount
+            rightLow[i] = rightLow[i] * (1 - amount) + lowMid * amount
+        }
+        var output = channels
+        output[0] = (0..<count).map { leftLow[$0] + leftHigh[$0] }
+        output[1] = (0..<count).map { rightLow[$0] + rightHigh[$0] }
+        return output
+    }
+
+    /// Onset-aware high-band emphasis. It follows the signal envelope instead of applying
+    /// a static bright EQ, so sustained hiss is not boosted together with attacks.
+    private static func recoverTransients(_ channels: [[Float]], sampleRate: Float, strength: Float, preset: ContentPreset) -> [[Float]] {
+        let amount = max(0, min(1, preset.transientAmount * strength))
+        guard amount > 0.01 else { return channels }
+        var output: [[Float]] = []
+        for channel in channels {
+            let transientBand = Biquad(BiquadCoefficients.highPass(sampleRate: sampleRate, frequency: 1700, q: 0.72)).process(channel)
+            let blockSize = max(64, Int(sampleRate * 0.012))
+            var result = channel
+            var previousEnvelope: Float = 0
+            var start = 0
+            while start < channel.count {
+                let end = min(channel.count, start + blockSize)
+                var sum: Float = 0
+                vDSP_svesq(Array(transientBand[start..<end]), 1, &sum, vDSP_Length(end - start))
+                let envelope = sqrt(sum / Float(max(1, end - start)))
+                let onset = max(0, envelope - previousEnvelope)
+                let attackRatio = onset / max(envelope, 1e-7)
+                let emphasis = min(1.7, attackRatio * 2.2)
+                let addAmount = 0.20 * amount * emphasis
+                for i in start..<end { result[i] += transientBand[i] * addAmount }
+                previousEnvelope = envelope
+                start = end
+            }
+            output.append(result)
         }
         return output
     }
@@ -274,7 +479,7 @@ enum AudioProcessor {
         return output
     }
 
-    private static func addAirAndDetail(_ channels: [[Float]], sampleRate: Float, strength: Float) -> [[Float]] {
+    private static func addAirAndDetail(_ channels: [[Float]], sampleRate: Float, strength: Float, preset: ContentPreset) -> [[Float]] {
         guard sampleRate / 2 > 12000 else { return channels }
         var output: [[Float]] = []
         for channel in channels {
@@ -282,11 +487,11 @@ enum AudioProcessor {
             var harmonic = high
             for i in 0..<harmonic.count {
                 let x = harmonic[i] * 2.0
-                harmonic[i] = tanh(x) * 0.22 * strength
+                harmonic[i] = tanh(x) * (0.14 + preset.airGain * 0.06) * strength
             }
             var mixed = channel
             for i in 0..<mixed.count { mixed[i] += harmonic[i] }
-            let air = Biquad(BiquadCoefficients.highShelf(sampleRate: sampleRate, frequency: 10500, gain: 1.6 * strength, q: 0.7)).process(mixed)
+            let air = Biquad(BiquadCoefficients.highShelf(sampleRate: sampleRate, frequency: 10500, gain: max(0.3, preset.airGain) * strength, q: 0.7)).process(mixed)
             output.append(air)
         }
         return output

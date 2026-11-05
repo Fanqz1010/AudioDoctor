@@ -24,6 +24,8 @@ struct AudioAnalysisReport: Codable {
     var bandEnergies: [BandEnergy]
     var thinnessScore: Float?
     var aiFeelScore: Float?
+    var artifactScores: ArtifactScores?
+    var issueIntervals: [IssueInterval]
     var distortionRisk: String
     var recommendations: [String]
 
@@ -41,14 +43,17 @@ enum AudioAnalyzer {
         let count = channels.map(\.count).min() ?? 0
         let duration = Double(count) / Double(sampleRate)
         let mono = channels.count == 1
-        let left = channels[0]
-        let right = mono ? channels[0] : channels[1]
+        let left = channels.first ?? []
+        let right = mono ? left : (channels.count > 1 ? channels[1] : left)
 
-        let samplePeak = DSP.peak(left + right)
+        let mixedStereo = zip(left, right).map(+)
+        let samplePeak = DSP.peak(mixedStereo)
         let truePeak = DSP.truePeakEstimate(channels)
-        let rmsValue = DSP.rms(left + right)
+        let rmsValue = DSP.rms(mixedStereo)
         let crest = DSP.db(samplePeak) - DSP.db(rmsValue)
-        let dc = (left.reduce(0, +) + right.reduce(0, +)) / Float(max(1, 2 * count))
+        let dc = count > 0
+            ? (left.reduce(0, +) + right.reduce(0, +)) / Float(2 * count)
+            : 0
         var clipped = 0
         for channel in channels {
             for sample in channel where abs(sample) >= 0.998 { clipped += 1 }
@@ -99,10 +104,19 @@ enum AudioAnalyzer {
         let total = linearPowers.reduce(0, +)
         var bandEnergies: [AudioAnalysisReport.BandEnergy] = []
         for band in bands where band.1 < band.2 {
-            let bandPower = spectrum.filter { $0.frequency >= band.1 && $0.frequency < band.2 }.map { pow(10, $0.powerDb / 10) }.reduce(0, +)
-            bandEnergies.append(.init(name: band.0, lowHz: band.1, highHz: band.2, energyPercent: total > 0 ? bandPower / total * 100 : 0))
+            let bandPower = spectrum.filter { $0.frequency >= band.1 && $0.frequency < band.2 }
+                .map { pow(10, $0.powerDb / 10) }
+                .reduce(0, +)
+            bandEnergies.append(.init(
+                name: band.0,
+                lowHz: band.1,
+                highHz: band.2,
+                energyPercent: total > 0 ? bandPower / total * 100 : 0
+            ))
         }
-        let hissPower = spectrum.filter { $0.frequency >= 9000 }.map { pow(10, $0.powerDb / 10) }.reduce(0, +)
+        let hissPower = spectrum.filter { $0.frequency >= 9000 }
+            .map { pow(10, $0.powerDb / 10) }
+            .reduce(0, +)
         let hissRatio = total > 0 ? DSP.db(sqrt(hissPower / total)) : nil
         let positivePowers = linearPowers.filter { $0 > 0 }
         let logSum = positivePowers.map { log($0) }.reduce(0, +)
@@ -110,10 +124,27 @@ enum AudioAnalyzer {
         let arithmetic = total / Float(max(1, positivePowers.count))
         let flatness = arithmetic > 0 ? geometric / arithmetic : nil
 
-        let lowEnergy = bandEnergies.filter { $0.lowHz >= 20 && $0.highHz <= 350 }.map(\.energyPercent).reduce(0, +)
+        let lowEnergy = bandEnergies.filter { $0.lowHz >= 20 && $0.highHz <= 350 }
+            .map(\.energyPercent).reduce(0, +)
         let thinness = max(0, min(100, (30 - lowEnergy) / 30 * 100))
         let highRatioDb = hissRatio ?? -60
         let aiFeel = max(0, min(100, thinness * 0.55 + max(0, (highRatioDb + 18) / 18) * 45))
+        let artifacts = ArtifactAnalyzer.score(
+            channels: channels,
+            sampleRate: sampleRate,
+            spectrum: spectrum,
+            flatness: flatness,
+            lowEnergyPercent: lowEnergy,
+            hissRatioDb: highRatioDb,
+            stereoCorrelation: correlation,
+            channelBalanceDb: channelBalance,
+            monoFoldDownLossDb: monoFoldDownLoss
+        )
+        let issueIntervals = ArtifactAnalyzer.locateIssues(
+            channels: channels,
+            sampleRate: sampleRate,
+            mono: mono
+        )
         let distortionRisk: String
         if clipped > count / 100 || DSP.db(samplePeak) > -0.1 || DSP.db(truePeak) > 0 {
             distortionRisk = "高：存在削波或超采样峰值"
@@ -124,12 +155,16 @@ enum AudioAnalyzer {
         }
 
         var recommendations: [String] = []
-        if lowEnergy < 15 { recommendations.append("低频不足，建议使用「丰满修复」或导入参考曲匹配。") }
-        if highRatioDb > -12 { recommendations.append("高频沙沙声偏多，建议开启「去沙声」。") }
+        if artifacts.hiss > 45 { recommendations.append("高频沙沙声/噪声伪影偏明显：开启「高频伪影抑制」，强度建议从 0.8 开始。") }
+        if artifacts.shimmer > 45 { recommendations.append("高频金属感/闪烁感偏高：优先降低 6–12kHz 的过量增益，再少量补空气感。") }
+        if artifacts.spectralHole > 45 { recommendations.append("存在频谱空洞：使用参考曲匹配或按内容预设补齐中低频/中高频。") }
+        if artifacts.thinness > 45 { recommendations.append("频段偏薄：开启「低频与身体感补偿」，必要时导入同风格参考曲。") }
+        if artifacts.phaseInstability > 45 || artifacts.stereoAnomaly > 45 { recommendations.append("相位/立体声异常：开启低频单声道化，并复核单声道折叠损失。") }
+        if artifacts.transientSmear > 45 { recommendations.append("瞬态发糊：开启「瞬态恢复」，避免继续提高整体压缩。") }
         if let corr = correlation, corr < 0.25 { recommendations.append("相位风险较高，转换单声道前请先试听。") }
         if clipped > count / 100 || DSP.db(truePeak) > 0 { recommendations.append("建议开启真峰限制，目标 -1 dBTP。") }
         if crest < 4.5 { recommendations.append("峰值因子很低，建议检查是否过度限幅。") }
-        if recommendations.isEmpty { recommendations.append("整体指标健康，可按需要做响度标准化或声道转换。") }
+        if recommendations.isEmpty { recommendations.append("整体指标健康，可按需要做响度标准化、内容预设优化或声道转换。") }
 
         return AudioAnalysisReport(
             filename: filename,
@@ -148,13 +183,15 @@ enum AudioAnalyzer {
             channelBalanceDb: channelBalance,
             monoFoldDownLossDb: monoFoldDownLoss,
             spatialScore: mono ? nil : spatialScore,
-            clippingPercent: count > 0 ? Float(clipped) / Float(count * channels.count) * 100 : 0,
+            clippingPercent: count > 0 ? Float(clipped) / Float(count * max(1, channels.count)) * 100 : 0,
             phaseRisk: phaseRisk,
             hissRatioDb: hissRatio,
             spectralFlatness: flatness,
             bandEnergies: bandEnergies,
             thinnessScore: thinness,
             aiFeelScore: aiFeel,
+            artifactScores: artifacts,
+            issueIntervals: issueIntervals,
             distortionRisk: distortionRisk,
             recommendations: recommendations
         )

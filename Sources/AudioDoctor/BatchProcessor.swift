@@ -45,6 +45,16 @@ struct BatchRecord: Identifiable, Codable {
     let lowEnergyPercent: Float
     let hissRatioDb: Float?
     let aiFeelScore: Float?
+    let artifactScores: ArtifactScores?
+    let issueIntervals: [IssueInterval]
+
+    var artifactHiss: Float? { artifactScores?.hiss }
+    var artifactShimmer: Float? { artifactScores?.shimmer }
+    var artifactSpectralHole: Float? { artifactScores?.spectralHole }
+    var artifactPhaseInstability: Float? { artifactScores?.phaseInstability }
+    var artifactTransientSmear: Float? { artifactScores?.transientSmear }
+    var artifactStereoAnomaly: Float? { artifactScores?.stereoAnomaly }
+    var artifactOverall: Float? { artifactScores?.overall }
     let failedChecks: [String]
     let reviewChecks: [String]
     let outputPath: String?
@@ -76,6 +86,8 @@ struct BatchSummary {
     let skipped: Int
     let cancelled: Bool
     let reportURL: URL?
+    let htmlReportURL: URL?
+    let aggregate: BatchAggregate?
 }
 
 final class BatchCancellation {
@@ -152,7 +164,7 @@ enum BatchProcessor {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyyMMdd-HHmmss"
         let reportURL = outputRoot.appendingPathComponent("AudioDoctor-Batch-Report-\(formatter.string(from: Date())).csv")
-        let header = "序号,状态,等级,结论,文件名,源文件,时长秒,采样率,声道,综合响度LUFS,真峰dBTP,削波百分比,峰值因子dB,相位相关性,立体声宽度百分比,左右电平差dB,单声道折叠损失dB,空间展开指数,低频能量百分比,高频噪声dB,疑似AI感,失败项,复核项,输出文件,处理后LUFS,处理后真峰dBTP,错误\n"
+        let header = "序号,状态,等级,结论,文件名,源文件,时长秒,采样率,声道,综合响度LUFS,真峰dBTP,削波百分比,峰值因子dB,相位相关性,立体声宽度百分比,左右电平差dB,单声道折叠损失dB,空间展开指数,低频能量百分比,高频噪声dB,疑似AI感,沙声伪影,金属闪烁,频谱空洞,相位不稳定,瞬态模糊,立体声异常,AI伪影总分,问题定位,失败项,复核项,输出文件,处理后LUFS,处理后真峰dBTP,错误\n"
         let csvHeaderData = Data(("\u{FEFF}" + header).utf8)
         try csvHeaderData.write(to: reportURL, options: .atomic)
         let csvHandle = try FileHandle(forWritingTo: reportURL)
@@ -189,6 +201,14 @@ enum BatchProcessor {
         }
 
         try? csvHandle.close()
+        let aggregate = BatchAggregate.summarize(records: records)
+        let htmlURL = try BatchReportWriter.writeHTML(
+            records: records,
+            aggregate: aggregate,
+            csvURL: reportURL,
+            outputFolder: outputRoot,
+            cancelled: cancellation.isCancelled
+        )
         state.currentFile = nil
         state.finishedAt = Date()
         state.reportURL = reportURL
@@ -201,7 +221,9 @@ enum BatchProcessor {
                 failed: state.failed,
                 skipped: state.skipped,
                 cancelled: cancellation.isCancelled,
-                reportURL: reportURL
+                reportURL: reportURL,
+                htmlReportURL: htmlURL,
+                aggregate: aggregate
             ),
             records
         )
@@ -325,9 +347,14 @@ enum BatchProcessor {
     ) -> BatchRecord {
         let assessment = report.map { LabelStandards.assess($0) }
         let sourceReport = report
-        let lowEnergy = sourceReport?.bandEnergies
-            .filter { $0.lowHz >= 20 && $0.highHz <= 350 }
-            .map(\.energyPercent).reduce(0, +) ?? 0
+        var lowEnergy: Float = 0
+        if let sourceReport {
+            var total: Float = 0
+            for band in sourceReport.bandEnergies where band.lowHz >= 20 && band.highHz <= 350 {
+                total += band.energyPercent
+            }
+            lowEnergy = total
+        }
         return BatchRecord(
             sourcePath: source.standardizedFileURL.path,
             fileName: source.lastPathComponent,
@@ -349,6 +376,8 @@ enum BatchProcessor {
             lowEnergyPercent: lowEnergy,
             hissRatioDb: sourceReport?.hissRatioDb,
             aiFeelScore: sourceReport?.aiFeelScore,
+            artifactScores: sourceReport?.artifactScores,
+            issueIntervals: sourceReport?.issueIntervals ?? [],
             failedChecks: assessment?.failedNames ?? [],
             reviewChecks: assessment?.reviewNames ?? [],
             outputPath: outputPath,
@@ -393,6 +422,16 @@ enum BatchProcessor {
             String(format: "%.2f", record.lowEnergyPercent),
             record.hissRatioDb.map { String(format: "%.2f", $0) } ?? "",
             record.aiFeelScore.map { String(format: "%.0f", $0) } ?? "",
+            record.artifactHiss.map { String(format: "%.0f", $0) } ?? "",
+            record.artifactShimmer.map { String(format: "%.0f", $0) } ?? "",
+            record.artifactSpectralHole.map { String(format: "%.0f", $0) } ?? "",
+            record.artifactPhaseInstability.map { String(format: "%.0f", $0) } ?? "",
+            record.artifactTransientSmear.map { String(format: "%.0f", $0) } ?? "",
+            record.artifactStereoAnomaly.map { String(format: "%.0f", $0) } ?? "",
+            record.artifactOverall.map { String(format: "%.0f", $0) } ?? "",
+            record.issueIntervals.prefix(12).map {
+                String(format: "%.1f-%.1fs %@", $0.startTime, $0.endTime, $0.issue)
+            }.joined(separator: "；"),
             record.failedChecks.joined(separator: "；"),
             record.reviewChecks.joined(separator: "；"),
             record.outputPath ?? "",
