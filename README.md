@@ -1,5 +1,9 @@
 # Audio Doctor
 
+![CI](https://github.com/Fanqz1010/AudioDoctor/actions/workflows/ci.yml/badge.svg)
+[![Release](https://img.shields.io/github/v/release/Fanqz1010/AudioDoctor)](https://github.com/Fanqz1010/AudioDoctor/releases)
+[![License](https://img.shields.io/github/license/Fanqz1010/AudioDoctor)](LICENSE)
+
 ![Audio Doctor](docs/assets/audio-doctor-poster.png)
 
 **Audio Doctor** 是一个原生 macOS SwiftUI / AVFoundation 桌面应用，用来给音乐、播客和 AI 生成音频做客观体检、轻量修复、声道转换和空间音频导出。它特别适合快速检查 Suno 等 AI 生成音乐中常见的高频沙沙声、频段偏薄、响度不一致和相位风险。
