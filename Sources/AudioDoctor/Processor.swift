@@ -111,7 +111,7 @@ enum ContentPreset: String, CaseIterable, Identifiable, Codable {
     }
 }
 
-struct RepairOptions {
+struct RepairOptions: Codable {
     var deHiss = true
     var fullness = true
     var matchReference = true

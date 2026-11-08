@@ -15,6 +15,20 @@ final class AppModel: ObservableObject {
     @Published var outputFormat = "wav"
     @Published var bitDepth = 24
 
+    // Internal-beta export center. The code is a friendly gate for early users,
+    // not DRM or a commercial licensing system.
+    @Published var isExportCenterVisible = false
+    @Published var betaCodeInput = ""
+    @Published var betaUnlockError: String?
+    @Published var isBetaUnlocked = false
+    private var betaUnlockedAt: Date?
+
+    init() {
+        let savedUnlockedAt = UserDefaults.standard.object(forKey: "AudioDoctor.betaUnlockedAt") as? Date
+        betaUnlockedAt = savedUnlockedAt
+        isBetaUnlocked = BetaAccess.isCurrentlyValid(unlockedAt: savedUnlockedAt)
+    }
+
     // Separate thousand-file batch workspace.
     @Published var selectedWorkspace = "single"
     @Published var batchSettings = BatchSettings()
@@ -95,6 +109,11 @@ final class AppModel: ObservableObject {
         }
         guard !isBatchRunning else { return }
         let settings = batchSettings
+        if settings.mode == .repair && !isBetaUnlocked {
+            isExportCenterVisible = true
+            batchErrorMessage = "批量修复导出属于内测功能，请先输入内测码。"
+            return
+        }
         let reference = batchReferenceURL
         let cancellation = BatchCancellation()
         batchCancellation = cancellation
@@ -190,8 +209,48 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func openExportCenter() {
+        betaUnlockError = nil
+        isExportCenterVisible = true
+    }
+
+    func unlockBetaAccess() {
+        if BetaAccess.isValid(betaCodeInput) {
+            let now = Date()
+            betaUnlockedAt = now
+            isBetaUnlocked = true
+            betaUnlockError = nil
+            UserDefaults.standard.set(now, forKey: "AudioDoctor.betaUnlockedAt")
+            message = "内测导出权限已开启，有效期至 2026-12-31。"
+        } else {
+            betaUnlockError = "内测码不正确。请检查大小写、空格或联系开发者。"
+        }
+    }
+
+    func applySunoRecommendedSettings(vocalFocus: Bool) {
+        repair.presetRawValue = (vocalFocus ? ContentPreset.sunoVocal : .sunoPop).rawValue
+        repair.deHiss = true
+        repair.fullness = true
+        repair.lowFrequencyMono = true
+        repair.transientRecovery = true
+        repair.exciter = false
+        repair.loudnessNormalize = true
+        repair.targetLUFS = -14
+        repair.strength = 0.8
+        channelTarget = "keep"
+        outputFormat = "wav"
+        bitDepth = 24
+        message = vocalFocus ? "已应用 Suno 人声内测推荐参数。" : "已应用 Suno 流行内测推荐参数。"
+    }
+
     func processAndExport() {
         guard inputURL != nil else { return }
+        guard isBetaUnlocked else {
+            openExportCenter()
+            errorMessage = "导出模块正在内测，请先输入内测码。"
+            return
+        }
+        isExportCenterVisible = false
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.audio]
         panel.nameFieldStringValue = processedName()
@@ -224,6 +283,7 @@ final class AppModel: ObservableObject {
         let target = channelTarget
         let bits = bitDepth
         let reference = referenceURL
+        let beforeReport = report
         DispatchQueue.global(qos: .userInitiated).async {
             do {
                 let loaded = try AudioIO.loadChannels(url: input)
@@ -239,10 +299,26 @@ final class AppModel: ObservableObject {
                 // Keep metrics on the repaired source because W/Y/Z/X are not speaker
                 // signals and would make stereo phase/loudness cards misleading.
                 let after = AudioAnalyzer.analyze(channels: analysisSource, sampleRate: loaded.sampleRate, filename: outputURL.lastPathComponent)
+                let feedback = ExportFeedbackReport(
+                    appVersion: BetaAccess.buildVersion,
+                    createdAt: Date(),
+                    sourceFilename: input.lastPathComponent,
+                    settings: options,
+                    channelTarget: target,
+                    outputFormat: self.outputFormat,
+                    bitDepth: bits,
+                    before: beforeReport ?? after,
+                    after: after
+                )
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+                encoder.dateEncodingStrategy = .iso8601
+                let feedbackURL = URL(fileURLWithPath: outputURL.path + ".report.json")
+                try encoder.encode(feedback).write(to: feedbackURL, options: .atomic)
                 DispatchQueue.main.async {
                     self.isWorking = false
                     self.processedReport = after
-                    self.message = "处理完成：\(outputURL.lastPathComponent)" + (target == "surround51" || target == "ambix" ? "（空间指标基于修复后的立体声源）" : "")
+                    self.message = "处理完成：\(outputURL.lastPathComponent)。反馈报告已生成：\(feedbackURL.lastPathComponent)"
                 }
             } catch {
                 DispatchQueue.main.async {
@@ -289,6 +365,11 @@ struct ContentView: View {
             }
         }
         .background(Color(nsColor: .windowBackgroundColor))
+        .sheet(isPresented: $model.isExportCenterVisible) {
+            ExportCenterView()
+                .environmentObject(model)
+                .frame(width: 620)
+        }
     }
 
     private var header: some View {
@@ -296,7 +377,7 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text("Audio Doctor 音频体检与修复")
                     .font(.title2.weight(.semibold))
-                    Text("v0.4 · AI 伪影精修 / 批量 Badcase 定位 / 内容优化")
+                    Text("v0.4.1 内测版 · 导出中心 / Suno 推荐参数 / 反馈报告")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
@@ -308,6 +389,18 @@ struct ContentView: View {
             }
             .pickerStyle(.segmented)
             .frame(width: 340)
+            if model.isBetaUnlocked {
+                Label("内测已开启", systemImage: "checkmark.seal")
+                    .font(.caption)
+                    .foregroundStyle(.green)
+            } else {
+                Button {
+                    model.openExportCenter()
+                } label: {
+                    Label("导出内测", systemImage: "key")
+                }
+                .controlSize(.small)
+            }
             if model.isWorking { ProgressView().controlSize(.small) }
         }
         .padding(20)
