@@ -1,7 +1,7 @@
 import Foundation
 
 enum BetaAccess {
-    static let buildVersion = "0.4.1-beta.1"
+    static let buildVersion = "0.4.2-beta.2"
     static let validCodes: Set<String> = [
         "SUNO-BETA-2026",
         "AUDIODR-BETA-2026"

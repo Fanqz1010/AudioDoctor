@@ -47,6 +47,13 @@ struct BatchRecord: Identifiable, Codable {
     let aiFeelScore: Float?
     let artifactScores: ArtifactScores?
     let issueIntervals: [IssueInterval]
+    let musicKey: String?
+    let musicKeyConfidence: Float?
+    let tempoBPM: Float?
+    let timeSignature: String?
+    let leadPart: String?
+    let supportParts: String?
+    let arrangementConfidence: Float?
 
     var artifactHiss: Float? { artifactScores?.hiss }
     var artifactShimmer: Float? { artifactScores?.shimmer }
@@ -164,7 +171,7 @@ enum BatchProcessor {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyyMMdd-HHmmss"
         let reportURL = outputRoot.appendingPathComponent("AudioDoctor-Batch-Report-\(formatter.string(from: Date())).csv")
-        let header = "序号,状态,等级,结论,文件名,源文件,时长秒,采样率,声道,综合响度LUFS,真峰dBTP,削波百分比,峰值因子dB,相位相关性,立体声宽度百分比,左右电平差dB,单声道折叠损失dB,空间展开指数,低频能量百分比,高频噪声dB,疑似AI感,沙声伪影,金属闪烁,频谱空洞,相位不稳定,瞬态模糊,立体声异常,AI伪影总分,问题定位,失败项,复核项,输出文件,处理后LUFS,处理后真峰dBTP,错误\n"
+        let header = "序号,状态,等级,结论,文件名,源文件,时长秒,采样率,声道,综合响度LUFS,真峰dBTP,削波百分比,峰值因子dB,相位相关性,立体声宽度百分比,左右电平差dB,单声道折叠损失dB,空间展开指数,低频能量百分比,高频噪声dB,疑似AI感,调性,调性置信度,节拍BPM,拍号推测,主奏推测,辅助层,配器置信度,沙声伪影,金属闪烁,频谱空洞,相位不稳定,瞬态模糊,立体声异常,AI伪影总分,问题定位,失败项,复核项,输出文件,处理后LUFS,处理后真峰dBTP,错误\n"
         let csvHeaderData = Data(("\u{FEFF}" + header).utf8)
         try csvHeaderData.write(to: reportURL, options: .atomic)
         let csvHandle = try FileHandle(forWritingTo: reportURL)
@@ -378,6 +385,13 @@ enum BatchProcessor {
             aiFeelScore: sourceReport?.aiFeelScore,
             artifactScores: sourceReport?.artifactScores,
             issueIntervals: sourceReport?.issueIntervals ?? [],
+            musicKey: sourceReport?.musicStructure?.tonality?.bestKeyName,
+            musicKeyConfidence: sourceReport?.musicStructure?.tonality?.confidence,
+            tempoBPM: sourceReport?.musicStructure?.tempo?.bpm,
+            timeSignature: sourceReport?.musicStructure?.tempo?.timeSignatureEstimate,
+            leadPart: sourceReport?.musicStructure?.arrangement?.leadSummary,
+            supportParts: sourceReport?.musicStructure?.arrangement?.supportSummary,
+            arrangementConfidence: sourceReport?.musicStructure?.arrangement?.confidence,
             failedChecks: assessment?.failedNames ?? [],
             reviewChecks: assessment?.reviewNames ?? [],
             outputPath: outputPath,
@@ -422,6 +436,13 @@ enum BatchProcessor {
             String(format: "%.2f", record.lowEnergyPercent),
             record.hissRatioDb.map { String(format: "%.2f", $0) } ?? "",
             record.aiFeelScore.map { String(format: "%.0f", $0) } ?? "",
+            record.musicKey ?? "",
+            record.musicKeyConfidence.map { String(format: "%.0f%%", $0 * 100) } ?? "",
+            record.tempoBPM.map { String(format: "%.1f", $0) } ?? "",
+            record.timeSignature ?? "",
+            record.leadPart ?? "",
+            record.supportParts ?? "",
+            record.arrangementConfidence.map { String(format: "%.0f%%", $0 * 100) } ?? "",
             record.artifactHiss.map { String(format: "%.0f", $0) } ?? "",
             record.artifactShimmer.map { String(format: "%.0f", $0) } ?? "",
             record.artifactSpectralHole.map { String(format: "%.0f", $0) } ?? "",

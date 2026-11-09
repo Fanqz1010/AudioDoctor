@@ -26,6 +26,7 @@ struct AudioAnalysisReport: Codable {
     var aiFeelScore: Float?
     var artifactScores: ArtifactScores?
     var issueIntervals: [IssueInterval]
+    var musicStructure: MusicStructureAnalysis?
     var distortionRisk: String
     var recommendations: [String]
 
@@ -145,6 +146,12 @@ enum AudioAnalyzer {
             sampleRate: sampleRate,
             mono: mono
         )
+        let musicStructure = MusicStructureAnalyzer.analyze(
+            channels: channels,
+            sampleRate: sampleRate,
+            stereoCorrelation: correlation,
+            stereoWidthPercent: mono ? nil : width
+        )
         let distortionRisk: String
         if clipped > count / 100 || DSP.db(samplePeak) > -0.1 || DSP.db(truePeak) > 0 {
             distortionRisk = "高：存在削波或超采样峰值"
@@ -192,6 +199,7 @@ enum AudioAnalyzer {
             aiFeelScore: aiFeel,
             artifactScores: artifacts,
             issueIntervals: issueIntervals,
+            musicStructure: musicStructure,
             distortionRisk: distortionRisk,
             recommendations: recommendations
         )

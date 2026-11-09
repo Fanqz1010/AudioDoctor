@@ -86,6 +86,20 @@ struct BatchAggregate: Codable, Equatable {
         if successful.contains(where: { $0.monoFoldDownLossDb ?? 0 < -3 }) { recommendations.append("存在单声道折叠损失：开启低频单声道化，并抽听手机/单声道播放。") }
         if records.filter({ $0.status == "失败" }).count > 0 { recommendations.append("读取失败文件需检查编码、损坏、权限或采样率支持，失败不会影响其它文件继续处理。") }
         if recommendations.isEmpty { recommendations.append("整体技术风险较低；可按内容风格执行轻量优化，并保留原始文件用于回退。") }
+        let keyCounts = successful.compactMap(\.musicKey)
+        if !keyCounts.isEmpty {
+            var frequency: [String: Int] = [:]
+            for key in keyCounts { frequency[key, default: 0] += 1 }
+            if let commonKey = frequency.max(by: { $0.value < $1.value }) {
+                recommendations.append("最常见调性为「\(commonKey.key)」（\(commonKey.value) 首）；同批次可优先用统一响度与频响策略，调性只作内容分析参考。")
+            }
+        }
+        let bpmValues = successful.compactMap(\.tempoBPM)
+        if bpmValues.count > 1 {
+            let sortedBPM = bpmValues.sorted()
+            let median = sortedBPM[sortedBPM.count / 2]
+            recommendations.append("本批 BPM 中位数约 \(String(format: "%.1f", median))；如用于歌单或混编场景，建议同时检查 BPM 离散度。")
+        }
 
         return BatchAggregate(
             total: records.count,
@@ -134,7 +148,7 @@ enum BatchReportWriter {
             let pills = (item.failedChecks + item.reviewChecks).map { "<span class=\"pill\">\(escape($0))</span>" }.joined()
             lines.append("<tr><td>\(item.rank)</td><td class=\"\(item.grade)\">\(item.grade)</td><td>\(escape(item.fileName))</td><td>\(score)</td><td>\(pills)</td></tr>")
         }
-        lines.append("</tbody></table><h2>全量明细</h2><div class=\"table-scroll\"><table><thead><tr><th>状态</th><th>等级</th><th>文件</th><th>LUFS</th><th>dBTP</th><th>相位</th><th>低频%</th><th>沙声</th><th>金属感</th><th>空洞</th><th>瞬态</th><th>AI总分</th><th>失败/复核</th><th>时间定位</th><th>错误</th></tr></thead><tbody>")
+        lines.append("</tbody></table><h2>全量明细</h2><div class=\"table-scroll\"><table><thead><tr><th>状态</th><th>等级</th><th>文件</th><th>调性</th><th>BPM</th><th>主奏推测</th><th>LUFS</th><th>dBTP</th><th>相位</th><th>低频%</th><th>沙声</th><th>金属感</th><th>空洞</th><th>瞬态</th><th>AI总分</th><th>失败/复核</th><th>时间定位</th><th>错误</th></tr></thead><tbody>")
         for record in records { lines.append(rowHTML(record)) }
         lines.append("</tbody></table></div>")
         let csvName = csvURL.map { escape($0.lastPathComponent) } ?? "未生成"
@@ -149,6 +163,9 @@ enum BatchReportWriter {
         values.append(escape(record.status))
         values.append("<span class=\(record.grade)>\(record.grade)</span>")
         values.append(escape(record.fileName))
+        values.append(escape(record.musicKey ?? "—"))
+        values.append(record.tempoBPM.map { String(format: "%.1f", $0) } ?? "—")
+        values.append(escape(record.leadPart ?? "—"))
         values.append(record.integratedLUFS.map { String(format: "%.1f", $0) } ?? "—")
         values.append(String(format: "%.1f", record.truePeakDb))
         values.append(record.stereoCorrelation.map { String(format: "%.2f", $0) } ?? "—")

@@ -32,6 +32,14 @@ jobs:
         run: |
           BINARY=".build/release/AudioDoctor"
           "$BINARY" analyze test-stereo.wav > analysis.json
+          python3 - <<'PY'
+          import json
+          report = json.load(open("analysis.json"))
+          assert report.get("musicStructure") is not None
+          assert report["musicStructure"].get("tonality") is not None
+          assert report["musicStructure"].get("tempo") is not None
+          assert report["musicStructure"].get("arrangement") is not None
+          PY
           "$BINARY" convert test-stereo.wav test-51.wav surround51
           "$BINARY" convert test-stereo.wav test-ambi.wav ambix
           afinfo test-51.wav | grep "6 ch"
@@ -50,6 +58,9 @@ jobs:
           assert len(rows) == 1, rows
           assert rows[0]["状态"] == "成功"
           assert rows[0]["AI伪影总分"], rows[0]
+          assert rows[0]["调性"], rows[0]
+          assert rows[0]["节拍BPM"], rows[0]
+          assert rows[0]["主奏推测"], rows[0]
           html_reports = list(Path("batch-output").glob("*.html"))
           assert len(html_reports) == 1, html_reports
           assert "<h1>批量音频体检报告</h1>" in html_reports[0].read_text(encoding="utf-8")

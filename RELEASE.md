@@ -1,5 +1,22 @@
 # Release Notes
 
+## v0.4.2-beta.2 - 2026-11-09
+
+### Added
+
+- Music structure analysis for single files:
+  - Key and mode estimation with tonic, candidates, confidence, and 12-pitch-class distribution.
+  - Tempo estimation with BPM, beat interval, estimated beat count, onset density, and a conservative meter hint.
+  - Arrangement role estimation for lead, accompaniment, bass, drums/percussion, pad, and keys/guitar-like layers.
+- Music structure fields in batch CSV and HTML reports.
+- Batch summary cards for key distribution, median BPM, and common lead-part estimates.
+- Content optimization workspace now shows a compact music-structure reference.
+- CI checks for tonality, tempo, arrangement JSON, and batch report columns.
+
+### Notes
+
+- Tonality, tempo, meter, and instrumentation are heuristic estimates on the mixed stereo/master signal. They are not source separation, automatic transcription, or a guarantee of real instrument identity.
+
 ## v0.4.0 - 2026-11-05
 
 ### Added

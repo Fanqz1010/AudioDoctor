@@ -352,6 +352,7 @@ struct ContentView: View {
                         ScrollView {
                             VStack(alignment: .leading, spacing: 18) {
                                 AnnotationDashboard(report: report)
+                                MusicStructureDashboard(report: report)
                                 artifactDashboard(report)
                                 issueTimeline(report)
                                 analysis(report)
@@ -377,7 +378,7 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text("Audio Doctor 音频体检与修复")
                     .font(.title2.weight(.semibold))
-                    Text("v0.4.1 内测版 · 导出中心 / Suno 推荐参数 / 反馈报告")
+                    Text("v0.4.2 内测版 · 调性 / BPM / 配器角色 / 导出中心")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }

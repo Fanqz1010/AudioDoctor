@@ -220,6 +220,10 @@ struct BatchWorkspaceView: View {
                 BatchAggregateSummaryView(aggregate: aggregate)
             }
 
+            if !model.batchRecords.isEmpty {
+                BatchMusicStructureSummaryView(records: model.batchRecords)
+            }
+
             HStack(alignment: .top, spacing: 12) {
                 BatchSummaryCard(title: "总数", value: "\(model.batchProgress.total)", color: .accentColor)
                 BatchSummaryCard(title: "成功", value: "\(model.batchProgress.succeeded)", color: .green)
@@ -341,6 +345,98 @@ struct BatchAggregateSummaryView: View {
         case "B": return .accentColor
         case "C": return .orange
         default: return .red
+        }
+    }
+}
+
+struct BatchMusicStructureSummaryView: View {
+    let records: [BatchRecord]
+
+    private var analyzed: [BatchRecord] {
+        records.filter { $0.status != "失败" }
+    }
+
+    private var keyCounts: [(name: String, count: Int)] {
+        var counts: [String: Int] = [:]
+        for record in analyzed {
+            if let key = record.musicKey { counts[key, default: 0] += 1 }
+        }
+        return counts.map { (name: $0.key, count: $0.value) }
+            .sorted {
+                $0.count == $1.count ? $0.name < $1.name : $0.count > $1.count
+            }
+    }
+
+    private var bpmValues: [Float] {
+        analyzed.compactMap(\.tempoBPM).sorted()
+    }
+
+    private var medianBPM: Float? {
+        guard !bpmValues.isEmpty else { return nil }
+        let middle = bpmValues.count / 2
+        if bpmValues.count % 2 == 1 { return bpmValues[middle] }
+        return (bpmValues[middle - 1] + bpmValues[middle]) / 2
+    }
+
+    private var leadCounts: [(name: String, count: Int)] {
+        var counts: [String: Int] = [:]
+        for record in analyzed {
+            if let lead = record.leadPart { counts[lead, default: 0] += 1 }
+        }
+        return counts.map { (name: $0.key, count: $0.value) }
+            .sorted {
+                $0.count == $1.count ? $0.name < $1.name : $0.count > $1.count
+            }
+    }
+
+    var body: some View {
+        GroupBox("音乐结构批量总结：调性 / BPM / 主奏") {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .top, spacing: 12) {
+                    BatchSummaryCard(title: "已判断调性", value: "\(keyCounts.reduce(0) { $0 + $1.count })/\(analyzed.count)", color: .accentColor)
+                    BatchSummaryCard(title: "BPM 中位数", value: medianBPM.map { String(format: "%.1f", $0) } ?? "—", color: .green)
+                    BatchSummaryCard(title: "最常见调性", value: keyCounts.first?.name ?? "—", color: .orange)
+                    BatchSummaryCard(title: "最常见主奏", value: leadCounts.first?.name ?? "—", color: .purple)
+                }
+
+                HStack(alignment: .top, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("调性分布").font(.headline)
+                        if keyCounts.isEmpty {
+                            Text("未形成稳定调性判断").font(.caption).foregroundStyle(.secondary)
+                        }
+                        ForEach(keyCounts.prefix(6), id: \.name) { item in
+                            HStack {
+                                Text(item.name).font(.caption).lineLimit(1)
+                                Spacer()
+                                Text("\(item.count)").font(.caption.monospacedDigit())
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("主奏推测分布").font(.headline)
+                        if leadCounts.isEmpty {
+                            Text("未形成稳定配器判断").font(.caption).foregroundStyle(.secondary)
+                        }
+                        ForEach(leadCounts.prefix(6), id: \.name) { item in
+                            HStack {
+                                Text(item.name).font(.caption).lineLimit(1)
+                                Spacer()
+                                Text("\(item.count)").font(.caption.monospacedDigit())
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                if let low = bpmValues.first, let high = bpmValues.last {
+                    Text("BPM 范围：\(String(format: "%.1f", low))–\(String(format: "%.1f", high))。调性、节拍和配器均为启发式推断，建议作为标注参考，不替代人工确认。")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
         }
     }
 }
@@ -473,6 +569,33 @@ struct BatchRecordDetail: View {
                 name: "疑似 AI 感", value: String(format: "%.0f / 100", ai),
                 standard: "≤ 35", score: 100 - ai,
                 level: ai > 65 ? .fail : (ai > 35 ? .review : .pass)
+            ))
+        }
+        if let key = record.musicKey {
+            values.append(BatchMetricDisplay(
+                name: "调式调性",
+                value: key,
+                standard: "仅作参考",
+                score: (record.musicKeyConfidence ?? 0) * 100,
+                level: (record.musicKeyConfidence ?? 0) < 0.45 ? .review : .pass
+            ))
+        }
+        if let bpm = record.tempoBPM {
+            values.append(BatchMetricDisplay(
+                name: "节拍 BPM",
+                value: String(format: "%.1f", bpm),
+                standard: record.timeSignature ?? "节拍为估算",
+                score: 100,
+                level: .pass
+            ))
+        }
+        if let lead = record.leadPart {
+            values.append(BatchMetricDisplay(
+                name: "主奏推测",
+                value: lead,
+                standard: "配器角色为启发式判断",
+                score: (record.arrangementConfidence ?? 0) * 100,
+                level: (record.arrangementConfidence ?? 0) < 0.45 ? .review : .pass
             ))
         }
         if let score = record.artifactOverall {
@@ -699,6 +822,7 @@ struct CriterionCard: View {
 struct AnnotationStandardsSummary: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            Group {
             standard("综合响度", "-16 ～ -12 LUFS；越接近 -14 越适合流媒体分发")
             standard("真峰 / 削波", "真峰 ≤ -1.0 dBTP；削波采样 ≤ 0.001%")
             standard("动态余量", "峰值因子 4.5 ～ 14 dB；过低代表过度压缩，过高注意弱段可听性")
@@ -707,9 +831,15 @@ struct AnnotationStandardsSummary: View {
             standard("空间展开", "指数 ≥70；由立体声宽度和相位安全度组成，不代表听感优劣")
             standard("低频身体感", "20～350Hz 能量 15%～50%；过低提示薄、假")
             standard("高频噪声 / AI 感", "9kHz 以上占比 ≤ -18 dB；疑似 AI 感 ≤35")
+            }
+            Group {
+            standard("AI 伪影七维", "沙声、金属闪烁、频谱空洞、偏薄、相位不稳、瞬态模糊、立体声异常：单项 ≤45，45～70 复核，>70 异常")
+            standard("时间轴定位", "高严重度窗口判异常；两个以上中严重度窗口判复核；标注员优先试听定位区间")
+            standard("音乐结构", "调性、BPM、拍号和配器主辅角色均为启发式推测；低置信度时必须人工确认")
             Text("这些指标用于减少主观听感偏差，不替代最终人工试听。")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
+            }
         }
     }
 

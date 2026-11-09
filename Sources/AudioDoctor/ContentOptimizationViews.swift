@@ -116,6 +116,26 @@ struct ContentOptimizationWorkspaceView: View {
                             }
                         }
 
+                        if let structure = report.musicStructure {
+                            GroupBox("音乐结构参考") {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    if let tonality = structure.tonality {
+                                        Label("调性：\(tonality.bestKeyName) · 置信度 \(String(format: "%.0f%%", tonality.confidence * 100))", systemImage: "music.quarternote.3")
+                                    }
+                                    if let tempo = structure.tempo {
+                                        Label(String(format: "节拍：%.1f BPM · %@", tempo.bpm, tempo.timeSignatureEstimate), systemImage: "metronome")
+                                    }
+                                    if let arrangement = structure.arrangement {
+                                        Label("主奏推测：\(arrangement.leadSummary)", systemImage: "person.wave.2")
+                                    }
+                                    Text("调性、BPM 与配器角色是本地启发式分析，仅用于辅助判断内容风格，不等同于乐谱结论。")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                                .font(.caption)
+                            }
+                        }
+
                         GroupBox("导出检查") {
                             VStack(alignment: .leading, spacing: 8) {
                                 Label("目标响度：\(String(format: "%.1f LUFS", model.repair.targetLUFS))", systemImage: "speaker.wave.2")
