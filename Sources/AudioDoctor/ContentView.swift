@@ -24,13 +24,19 @@ final class AppModel: ObservableObject {
     private var betaUnlockedAt: Date?
 
     init() {
+#if APP_STORE_BUILD
+        // The App Store distribution is sold as a complete app. Internal beta
+        // codes remain available only in the GitHub/internal build.
+        isBetaUnlocked = true
+#else
         let savedUnlockedAt = UserDefaults.standard.object(forKey: "AudioDoctor.betaUnlockedAt") as? Date
         betaUnlockedAt = savedUnlockedAt
         isBetaUnlocked = BetaAccess.isCurrentlyValid(unlockedAt: savedUnlockedAt)
+#endif
     }
 
     // Separate thousand-file batch workspace.
-    @Published var selectedWorkspace = "single"
+    @Published var selectedWorkspace = "annotation"
     @Published var batchSettings = BatchSettings()
     @Published var batchInputURL: URL?
     @Published var batchOutputURL: URL?
@@ -339,30 +345,18 @@ struct ContentView: View {
             Divider()
             if model.isWorking { ProgressView("正在分析音频…").padding() }
             switch model.selectedWorkspace {
+            case "annotation":
+                AnnotationWorkbenchView()
             case "batch":
                 BatchWorkspaceView()
                     .padding(20)
             case "content":
                 ContentOptimizationWorkspaceView()
                     .padding(20)
+            case "repair":
+                RepairStudioView()
             default:
-                HStack(alignment: .top, spacing: 20) {
-                    controls
-                    if let report = model.report {
-                        ScrollView {
-                            VStack(alignment: .leading, spacing: 18) {
-                                AnnotationDashboard(report: report)
-                                MusicStructureDashboard(report: report)
-                                artifactDashboard(report)
-                                issueTimeline(report)
-                                analysis(report)
-                            }
-                        }
-                    } else {
-                        emptyState
-                    }
-                }
-                .padding(20)
+                AnnotationWorkbenchView()
             }
         }
         .background(Color(nsColor: .windowBackgroundColor))
@@ -378,18 +372,24 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text("Audio Doctor 音频体检与修复")
                     .font(.title2.weight(.semibold))
-                    Text("v0.4.2 内测版 · 调性 / BPM / 配器角色 / 导出中心")
+                Text(headerVersionDescription)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
             Spacer()
             Picker("工作台", selection: $model.selectedWorkspace) {
-                Text("AI 伪影精修").tag("single")
-                Text("批量体检标注").tag("batch")
-                Text("内容优化导出").tag("content")
+                Text("标注工作台").tag("annotation")
+                Text("修复工作台").tag("repair")
+                Text("批量标注").tag("batch")
+                Text("内容优化").tag("content")
             }
             .pickerStyle(.segmented)
-            .frame(width: 340)
+            .frame(width: 430)
+            #if APP_STORE_BUILD
+            Label("完整版已解锁", systemImage: "checkmark.seal")
+                .font(.caption)
+                .foregroundStyle(.green)
+            #else
             if model.isBetaUnlocked {
                 Label("内测已开启", systemImage: "checkmark.seal")
                     .font(.caption)
@@ -402,9 +402,18 @@ struct ContentView: View {
                 }
                 .controlSize(.small)
             }
+            #endif
             if model.isWorking { ProgressView().controlSize(.small) }
         }
         .padding(20)
+    }
+
+    private var headerVersionDescription: String {
+        #if APP_STORE_BUILD
+        return "v0.5.0 · 五大类标注 / 音乐结构 / 转调节拍 / 和弦功能 / 修复工作台"
+        #else
+        return "v0.5.0 内测版 · 五大类标注 / 音乐结构 / 转调节拍 / 和弦功能 / 修复工作台"
+        #endif
     }
 
     private var controls: some View {

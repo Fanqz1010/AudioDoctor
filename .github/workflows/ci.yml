@@ -39,6 +39,9 @@ jobs:
           assert report["musicStructure"].get("tonality") is not None
           assert report["musicStructure"].get("tempo") is not None
           assert report["musicStructure"].get("arrangement") is not None
+          assert report["musicStructure"].get("contentType") is not None
+          assert isinstance(report["musicStructure"].get("timelineChanges"), list)
+          assert isinstance(report["musicStructure"].get("chordSegments"), list)
           PY
           "$BINARY" convert test-stereo.wav test-51.wav surround51
           "$BINARY" convert test-stereo.wav test-ambi.wav ambix
@@ -58,6 +61,8 @@ jobs:
           assert len(rows) == 1, rows
           assert rows[0]["状态"] == "成功"
           assert rows[0]["AI伪影总分"], rows[0]
+          assert rows[0]["是否音乐"], rows[0]
+          assert rows[0]["人声状态"], rows[0]
           assert rows[0]["调性"], rows[0]
           assert rows[0]["节拍BPM"], rows[0]
           assert rows[0]["主奏推测"], rows[0]

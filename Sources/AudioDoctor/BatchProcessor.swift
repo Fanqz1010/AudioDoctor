@@ -54,6 +54,12 @@ struct BatchRecord: Identifiable, Codable {
     let leadPart: String?
     let supportParts: String?
     let arrangementConfidence: Float?
+    let isMusic: Bool?
+    let musicConfidence: Float?
+    let vocalState: String?
+    let vocalConfidence: Float?
+    let timelineChanges: [MusicTimelineChange]
+    let chordSegments: [MusicChordSegment]
 
     var artifactHiss: Float? { artifactScores?.hiss }
     var artifactShimmer: Float? { artifactScores?.shimmer }
@@ -171,7 +177,7 @@ enum BatchProcessor {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyyMMdd-HHmmss"
         let reportURL = outputRoot.appendingPathComponent("AudioDoctor-Batch-Report-\(formatter.string(from: Date())).csv")
-        let header = "序号,状态,等级,结论,文件名,源文件,时长秒,采样率,声道,综合响度LUFS,真峰dBTP,削波百分比,峰值因子dB,相位相关性,立体声宽度百分比,左右电平差dB,单声道折叠损失dB,空间展开指数,低频能量百分比,高频噪声dB,疑似AI感,调性,调性置信度,节拍BPM,拍号推测,主奏推测,辅助层,配器置信度,沙声伪影,金属闪烁,频谱空洞,相位不稳定,瞬态模糊,立体声异常,AI伪影总分,问题定位,失败项,复核项,输出文件,处理后LUFS,处理后真峰dBTP,错误\n"
+        let header = "序号,状态,等级,结论,文件名,源文件,时长秒,采样率,声道,是否音乐,音乐置信度,人声状态,人声置信度,综合响度LUFS,真峰dBTP,削波百分比,峰值因子dB,相位相关性,立体声宽度百分比,左右电平差dB,单声道折叠损失dB,空间展开指数,低频能量百分比,高频噪声dB,疑似AI感,调性,调性置信度,节拍BPM,拍号推测,主奏推测,辅助层,配器置信度,转调或节拍变化,和弦功能摘要,沙声伪影,金属闪烁,频谱空洞,相位不稳定,瞬态模糊,立体声异常,AI伪影总分,问题定位,失败项,复核项,输出文件,处理后LUFS,处理后真峰dBTP,错误\n"
         let csvHeaderData = Data(("\u{FEFF}" + header).utf8)
         try csvHeaderData.write(to: reportURL, options: .atomic)
         let csvHandle = try FileHandle(forWritingTo: reportURL)
@@ -392,6 +398,12 @@ enum BatchProcessor {
             leadPart: sourceReport?.musicStructure?.arrangement?.leadSummary,
             supportParts: sourceReport?.musicStructure?.arrangement?.supportSummary,
             arrangementConfidence: sourceReport?.musicStructure?.arrangement?.confidence,
+            isMusic: sourceReport?.musicStructure?.contentType?.isMusic,
+            musicConfidence: sourceReport?.musicStructure?.contentType?.musicConfidence,
+            vocalState: sourceReport?.musicStructure?.contentType?.vocalState,
+            vocalConfidence: sourceReport?.musicStructure?.contentType?.vocalConfidence,
+            timelineChanges: sourceReport?.musicStructure?.timelineChanges ?? [],
+            chordSegments: sourceReport?.musicStructure?.chordSegments ?? [],
             failedChecks: assessment?.failedNames ?? [],
             reviewChecks: assessment?.reviewNames ?? [],
             outputPath: outputPath,
@@ -424,6 +436,10 @@ enum BatchProcessor {
             String(format: "%.3f", record.durationSeconds),
             String(Int(record.sampleRate)),
             String(record.channels),
+            record.isMusic.map { $0 ? "是" : "否" } ?? "",
+            record.musicConfidence.map { String(format: "%.0f%%", $0 * 100) } ?? "",
+            record.vocalState ?? "",
+            record.vocalConfidence.map { String(format: "%.0f%%", $0 * 100) } ?? "",
             record.integratedLUFS.map { String(format: "%.2f", $0) } ?? "",
             String(format: "%.2f", record.truePeakDb),
             String(format: "%.5f", record.clippingPercent),
@@ -443,6 +459,12 @@ enum BatchProcessor {
             record.leadPart ?? "",
             record.supportParts ?? "",
             record.arrangementConfidence.map { String(format: "%.0f%%", $0 * 100) } ?? "",
+            record.timelineChanges.prefix(10).map {
+                String(format: "%.1f-%.1fs %@：%@→%@", $0.startTime, $0.endTime, $0.type, $0.fromValue, $0.toValue)
+            }.joined(separator: "；"),
+            record.chordSegments.prefix(16).map {
+                String(format: "%.1fs %@(%@·%@)", $0.startTime, $0.chord, $0.romanNumeral, $0.function)
+            }.joined(separator: "；"),
             record.artifactHiss.map { String(format: "%.0f", $0) } ?? "",
             record.artifactShimmer.map { String(format: "%.0f", $0) } ?? "",
             record.artifactSpectralHole.map { String(format: "%.0f", $0) } ?? "",

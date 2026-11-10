@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Audio Doctor Web Workbench</title>
+  <style>
+    :root {
+      --ink:#172033; --muted:#667085; --line:#e4e8ef; --bg:#f7f9fc; --card:#fff;
+      --blue:#3f63d8; --purple:#b848b7; --teal:#12776f; --orange:#d97706; --green:#25a647;
+      --pink:#ff6f91; --mint:#33b89a; --radius:16px;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--ink); }
+    header { position:sticky; top:0; z-index:10; display:flex; align-items:center; gap:18px; padding:14px 24px; background:rgba(255,255,255,.92); border-bottom:1px solid var(--line); backdrop-filter:blur(12px); }
+    .brand { display:flex; align-items:center; gap:10px; font-weight:700; }
+    .brand-mark { width:34px; height:34px; border-radius:11px; display:grid; place-items:center; background:linear-gradient(135deg,#4372ff,#7dd6c0); color:#fff; }
+    nav { margin-left:auto; display:flex; gap:6px; }
+    button { border:0; cursor:pointer; font:inherit; }
+    .mode { padding:8px 14px; border-radius:999px; color:var(--muted); background:#f2f4f7; }
+    .mode.active { color:#fff; background:var(--ink); }
+    .layout { display:grid; grid-template-columns:270px minmax(0,1fr); min-height:calc(100vh - 63px); }
+    aside { padding:18px; border-right:1px solid var(--line); background:rgba(255,255,255,.68); position:sticky; top:63px; height:calc(100vh - 63px); overflow:auto; }
+    .drop { border:2px dashed #c8d2e2; border-radius:18px; padding:24px 16px; text-align:center; background:#fff; margin-bottom:18px; }
+    .drop strong { display:block; margin-bottom:4px; }
+    .drop span { color:var(--muted); font-size:12px; }
+    .category { display:grid; gap:7px; }
+    .category button { display:grid; grid-template-columns:5px 1fr; gap:10px; text-align:left; padding:9px; border-radius:12px; color:var(--ink); background:rgba(255,255,255,.72); }
+    .category button.active, .category button:hover { background:#edf2ff; }
+    .bar { width:5px; border-radius:4px; }
+    .category strong { display:block; font-size:13px; }
+    .category small { color:var(--muted); }
+    main { padding:24px; max-width:1180px; }
+    .hero { display:flex; align-items:flex-end; justify-content:space-between; gap:18px; margin-bottom:18px; }
+    h1 { margin:.2em 0; font-size:26px; letter-spacing:-.02em; }
+    .sub { color:var(--muted); }
+    .pills { display:flex; gap:7px; flex-wrap:wrap; justify-content:flex-end; }
+    .pill { padding:4px 9px; border-radius:999px; font-size:12px; font-weight:650; }
+    section { margin-bottom:18px; padding:17px; border-radius:20px; background:var(--card); border:1px solid var(--line); scroll-margin-top:84px; }
+    .section-head { display:flex; align-items:center; gap:12px; margin-bottom:15px; }
+    .icon { width:40px; height:40px; display:grid; place-items:center; border-radius:12px; font-weight:700; }
+    .grid { display:grid; grid-template-columns:repeat(4,minmax(120px,1fr)); gap:10px; }
+    .metric { padding:12px; border-radius:14px; background:#f5f7fb; }
+    .metric span { display:block; color:var(--muted); font-size:12px; }
+    .metric strong { font-size:17px; }
+    table { width:100%; border-collapse:collapse; font-size:12px; }
+    th,td { padding:8px 7px; text-align:left; border-bottom:1px solid var(--line); white-space:nowrap; }
+    th { color:var(--muted); position:sticky; top:0; background:#fff; }
+    .table-wrap { max-height:320px; overflow:auto; border:1px solid var(--line); border-radius:14px; }
+    footer { margin-top:18px; color:var(--muted); font-size:12px; }
+    body.repair { background:linear-gradient(135deg,#fff8fb,#f5fffb); }
+    body.repair aside { border-color:#e9e2ef; background:rgba(255,255,255,.75); }
+    body.repair section { border-color:#f0dfe8; box-shadow:0 6px 20px rgba(255,111,145,.04); }
+    body.repair .drop { border-color:#ffb7c8; background:linear-gradient(180deg,#fff,#fff8fb); }
+    .cute { display:flex; align-items:center; gap:10px; margin-bottom:16px; }
+    .cute span { width:42px; height:42px; display:grid; place-items:center; background:#fff; border-radius:50%; font-size:20px; }
+    .hidden { display:none !important; }
+    @media (max-width: 860px) { .layout { grid-template-columns:1fr; } aside { position:static; height:auto; border-right:0; border-bottom:1px solid var(--line); } .grid { grid-template-columns:repeat(2,1fr); } .hero { align-items:flex-start; } }
+  </style>
+</head>
+<body>
+<header>
+  <div class="brand"><div class="brand-mark">AD</div><div>Audio Doctor <small>Web Workbench</small></div></div>
+  <nav>
+    <button class="mode active" data-mode="annotation">标注工作台</button>
+    <button class="mode" data-mode="repair">修复工作台</button>
+  </nav>
+</header>
+<div class="layout">
+  <aside id="annotationSide">
+    <div class="drop"><strong>拖入待标注音频</strong><span>本地引擎接入后自动分析</span></div>
+    <div class="category" id="annotationNav">
+      <button data-target="content" class="active"><i class="bar" style="background:#3f63d8"></i><span><strong>01 内容判断</strong><small>是否音乐 / 人声</small></span></button>
+      <button data-target="structure"><i class="bar" style="background:#b848b7"></i><span><strong>02 音乐结构</strong><small>调性 / 节拍 / 和弦</small></span></button>
+      <button data-target="quality"><i class="bar" style="background:#12776f"></i><span><strong>03 技术质量</strong><small>响度 / 相位 / 伪影</small></span></button>
+      <button data-target="timeline"><i class="bar" style="background:#d97706"></i><span><strong>04 时间定位</strong><small>Badcase 区间</small></span></button>
+      <button data-target="conclusion"><i class="bar" style="background:#25a647"></i><span><strong>05 标确切认</strong><small>人工复核</small></span></button>
+    </div>
+  </aside>
+  <aside id="repairSide" class="hidden">
+    <div class="cute"><span>🩺</span><div><strong>修复小诊室</strong><br><small>保守处理，先看诊断</small></div></div>
+    <div class="drop"><strong>拖入要修复的音频</strong><span>原始文件不会被覆盖</span></div>
+    <div class="category" id="repairNav">
+      <button data-target="overview" class="active"><i class="bar" style="background:#ff6f91"></i><span><strong>修复总览</strong><small>问题一目了然</small></span></button>
+      <button data-target="plan"><i class="bar" style="background:#33b89a"></i><span><strong>修复方案</strong><small>沙声 / 偏薄 / 瞬态</small></span></button>
+      <button data-target="spatial"><i class="bar" style="background:#5d8bff"></i><span><strong>格式与空间</strong><small>单声道 / 5.1 / AmbiX</small></span></button>
+      <button data-target="result"><i class="bar" style="background:#e6952c"></i><span><strong>结果确认</strong><small>前后对比</small></span></button>
+    </div>
+  </aside>
+  <main>
+    <div id="annotationMain">
+      <div class="hero">
+        <div><div class="sub">Audio Doctor v0.5 Web Foundation</div><h1>简约标注工作台</h1><div class="sub">五个固定大类：内容 → 结构 → 质量 → 定位 → 确认。</div></div>
+        <div class="pills"><span class="pill" style="background:#e8f7ee;color:#16864b">建议通过</span><span class="pill" style="background:#fff1e3;color:#b25e06">复核 2</span></div>
+      </div>
+      <section id="content"><div class="section-head"><div class="icon" style="background:#e8edff;color:#3f63d8">01</div><div><strong>内容判断</strong><div class="sub">先判断是否能进入音乐标注流程</div></div></div><div class="grid"><div class="metric"><span>是否音乐</span><strong>是</strong></div><div class="metric"><span>音乐置信度</span><strong>85%</strong></div><div class="metric"><span>人声状态</span><strong>纯音乐</strong></div><div class="metric"><span>人声置信度</span><strong>24%</strong></div></div></section>
+      <section id="structure"><div class="section-head"><div class="icon" style="background:#fbe8fb;color:#b848b7">02</div><div><strong>音乐结构</strong><div class="sub">调性、转调、节拍、拍号、配器与和弦功能</div></div></div><div class="grid"><div class="metric"><span>主调</span><strong>C 大调</strong></div><div class="metric"><span>BPM</span><strong>120.4</strong></div><div class="metric"><span>拍号</span><strong>4/4</strong></div><div class="metric"><span>主奏推测</span><strong>键盘类</strong></div></div><div class="table-wrap"><table><thead><tr><th>时间</th><th>和弦</th><th>级数</th><th>功能</th><th>置信度</th></tr></thead><tbody><tr><td>0.0–4.0s</td><td>C</td><td>I</td><td>主功能 T</td><td>82%</td></tr><tr><td>4.0–8.0s</td><td>G</td><td>V</td><td>属功能 D</td><td>78%</td></tr><tr><td>8.0–12.0s</td><td>Am</td><td>vi</td><td>主功能 T</td><td>74%</td></tr></tbody></table></div></section>
+      <section id="quality"><div class="section-head"><div class="icon" style="background:#e4f5f3;color:#12776f">03</div><div><strong>技术质量</strong><div class="sub">响度、真峰、削波、相位、空间与 AI 伪影</div></div></div><div class="grid"><div class="metric"><span>响度</span><strong>-14.1 LUFS</strong></div><div class="metric"><span>真峰</span><strong>-1.2 dBTP</strong></div><div class="metric"><span>相位</span><strong>0.62</strong></div><div class="metric"><span>AI 伪影</span><strong>42 / 100</strong></div></div></section>
+      <section id="timeline"><div class="section-head"><div class="icon" style="background:#fff1df;color:#d97706">04</div><div><strong>时间定位</strong><div class="sub">把问题落到标注员可直接试听的区间</div></div></div><div class="table-wrap"><table><thead><tr><th>区间</th><th>问题</th><th>严重度</th><th>依据</th></tr></thead><tbody><tr><td>12.4–14.8s</td><td>高频沙沙声</td><td>中</td><td>9kHz 以上稳态能量偏高</td></tr><tr><td>38.0–41.2s</td><td>低频偏薄</td><td>中</td><td>55–180Hz 能量低于参考</td></tr></tbody></table></div></section>
+      <section id="conclusion"><div class="section-head"><div class="icon" style="background:#e8f7ee;color:#25a647">05</div><div><strong>标确切认</strong><div class="sub">自动结论只作建议，最终由人工确认</div></div></div><div class="pills" style="justify-content:flex-start"><span class="pill" style="background:#eef2ff;color:#3f63d8">B 级</span><span class="pill" style="background:#fff1e3;color:#b25e06">响度复核</span><span class="pill" style="background:#fff1e3;color:#b25e06">低频复核</span></div></section>
+    </div>
+    <div id="repairMain" class="hidden">
+      <div class="hero"><div><div class="sub">Audio Doctor v0.5 Web Foundation</div><h1>清爽可爱修复工作台</h1><div class="sub">修复步骤与标注诊断一一对应。</div></div><div class="pills"><span class="pill" style="background:#ffeef2;color:#d94563">AI 味 42</span><span class="pill" style="background:#e8f7ee;color:#16864b">可修复</span></div></div>
+      <section id="overview"><div class="section-head"><div class="icon" style="background:#ffeef2;color:#ff6f91">🎧</div><div><strong>修复总览</strong><div class="sub">先看诊断，再动手</div></div></div><div class="grid"><div class="metric"><span>响度</span><strong>-14.1 LUFS</strong></div><div class="metric"><span>真峰</span><strong>-1.2 dBTP</strong></div><div class="metric"><span>宽度</span><strong>42%</strong></div><div class="metric"><span>AI 伪影</span><strong>42</strong></div></div></section>
+      <section id="plan"><div class="section-head"><div class="icon" style="background:#e9f9f4;color:#33b89a">🩺</div><div><strong>修复方案</strong><div class="sub">先降噪，再补身体感，最后保护动态</div></div></div><div class="table-wrap"><table><thead><tr><th>问题</th><th>建议</th><th>分数</th></tr></thead><tbody><tr><td>沙声</td><td>高频伪影抑制</td><td>54</td></tr><tr><td>偏薄</td><td>低频身体感补偿</td><td>61</td></tr><tr><td>瞬态模糊</td><td>鼓点与辅音恢复</td><td>47</td></tr></tbody></table></div></section>
+      <section id="spatial"><div class="section-head"><div class="icon" style="background:#eaf0ff;color:#5d8bff">🌈</div><div><strong>格式与空间</strong><div class="sub">声道转换说明保持透明</div></div></div><div class="grid"><div class="metric"><span>保持原样</span><strong>推荐</strong></div><div class="metric"><span>单声道</span><strong>安全优先</strong></div><div class="metric"><span>5.1</span><strong>6ch</strong></div><div class="metric"><span>AmbiX</span><strong>4ch</strong></div></div></section>
+      <section id="result"><div class="section-head"><div class="icon" style="background:#fff4e5;color:#e6952c">✨</div><div><strong>结果确认</strong><div class="sub">修复前后数据必须可比较</div></div></div><div class="grid"><div class="metric"><span>AI 味</span><strong>42 → 31</strong></div><div class="metric"><span>响度</span><strong>-14.0</strong></div><div class="metric"><span>真峰</span><strong>-1.1</strong></div><div class="metric"><span>报告</span><strong>JSON</strong></div></div></section>
+    </div>
+    <footer>这是 v0.5.0 的跨平台 Web 界面基础稿。当前示例数据仅用于布局确认；本地分析引擎接入后，所有指标都会替换为真实分析结果。和弦、转调、拍号与配器均为启发式分析，需要人工复核。</footer>
+  </main>
+</div>
+<script>
+  const modes = document.querySelectorAll('.mode');
+  const annotationSide = document.getElementById('annotationSide');
+  const repairSide = document.getElementById('repairSide');
+  const annotationMain = document.getElementById('annotationMain');
+  const repairMain = document.getElementById('repairMain');
+
+  function navHandler(container) {
+    const buttons = container.querySelectorAll('button[data-target]');
+    buttons.forEach(button => {
+      button.addEventListener('click', () => {
+        container.querySelectorAll('button').forEach(item => item.classList.remove('active'));
+        button.classList.add('active');
+        const target = document.getElementById(button.dataset.target);
+        if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    });
+  }
+
+  navHandler(document.getElementById('annotationNav'));
+  navHandler(document.getElementById('repairNav'));
+
+  modes.forEach(button => {
+    button.addEventListener('click', () => {
+      const repair = button.dataset.mode === 'repair';
+      modes.forEach(item => item.classList.toggle('active', item === button));
+      annotationSide.classList.toggle('hidden', repair);
+      repairSide.classList.toggle('hidden', !repair);
+      annotationMain.classList.toggle('hidden', repair);
+      repairMain.classList.toggle('hidden', !repair);
+      document.body.classList.toggle('repair', repair);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
+  });
+</script>
+</body>
+</html>

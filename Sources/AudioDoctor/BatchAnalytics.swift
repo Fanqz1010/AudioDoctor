@@ -85,6 +85,20 @@ struct BatchAggregate: Codable, Equatable {
         if successful.contains(where: { ($0.artifactOverall ?? 0) > 65 }) { recommendations.append("AI 伪影总分 >65 的文件建议人工试听高频细节和鼓组瞬态，不要只看总分。") }
         if successful.contains(where: { $0.monoFoldDownLossDb ?? 0 < -3 }) { recommendations.append("存在单声道折叠损失：开启低频单声道化，并抽听手机/单声道播放。") }
         if records.filter({ $0.status == "失败" }).count > 0 { recommendations.append("读取失败文件需检查编码、损坏、权限或采样率支持，失败不会影响其它文件继续处理。") }
+        let musicCount = successful.filter { $0.isMusic == true }.count
+        let reviewedMusicCount = successful.filter { $0.isMusic != nil }.count
+        if reviewedMusicCount > 0 {
+            recommendations.append("内容判断：\(musicCount)/\(reviewedMusicCount) 条疑似音乐；非音乐或低置信度文件请先确认应使用的标注规范。")
+        }
+        var vocalCounts: [String: Int] = [:]
+        for record in successful {
+            if let vocal = record.vocalState { vocalCounts[vocal, default: 0] += 1 }
+        }
+        if let dominantVocal = vocalCounts.max(by: { $0.value < $1.value }) {
+            recommendations.append("人声状态最多为「\(dominantVocal.key)」（\(dominantVocal.value) 条）；背景和声与电子人声需人工复核。")
+        }
+        let changeCount = successful.reduce(0) { $0 + $1.timelineChanges.count }
+        if changeCount > 0 { recommendations.append("检测到 \(changeCount) 处疑似转调 / 节拍变化；请重点复核变化边界和拍号。") }
         if recommendations.isEmpty { recommendations.append("整体技术风险较低；可按内容风格执行轻量优化，并保留原始文件用于回退。") }
         let keyCounts = successful.compactMap(\.musicKey)
         if !keyCounts.isEmpty {
@@ -148,7 +162,7 @@ enum BatchReportWriter {
             let pills = (item.failedChecks + item.reviewChecks).map { "<span class=\"pill\">\(escape($0))</span>" }.joined()
             lines.append("<tr><td>\(item.rank)</td><td class=\"\(item.grade)\">\(item.grade)</td><td>\(escape(item.fileName))</td><td>\(score)</td><td>\(pills)</td></tr>")
         }
-        lines.append("</tbody></table><h2>全量明细</h2><div class=\"table-scroll\"><table><thead><tr><th>状态</th><th>等级</th><th>文件</th><th>调性</th><th>BPM</th><th>主奏推测</th><th>LUFS</th><th>dBTP</th><th>相位</th><th>低频%</th><th>沙声</th><th>金属感</th><th>空洞</th><th>瞬态</th><th>AI总分</th><th>失败/复核</th><th>时间定位</th><th>错误</th></tr></thead><tbody>")
+        lines.append("</tbody></table><h2>全量明细</h2><div class=\"table-scroll\"><table><thead><tr><th>状态</th><th>等级</th><th>文件</th><th>音乐</th><th>人声</th><th>调性</th><th>BPM</th><th>变化</th><th>和弦</th><th>主奏推测</th><th>LUFS</th><th>dBTP</th><th>相位</th><th>低频%</th><th>沙声</th><th>金属感</th><th>空洞</th><th>瞬态</th><th>AI总分</th><th>失败/复核</th><th>时间定位</th><th>错误</th></tr></thead><tbody>")
         for record in records { lines.append(rowHTML(record)) }
         lines.append("</tbody></table></div>")
         let csvName = csvURL.map { escape($0.lastPathComponent) } ?? "未生成"
@@ -163,8 +177,24 @@ enum BatchReportWriter {
         values.append(escape(record.status))
         values.append("<span class=\(record.grade)>\(record.grade)</span>")
         values.append(escape(record.fileName))
+        values.append(record.isMusic.map { $0 ? "是" : "否" } ?? "—")
+        values.append(escape(record.vocalState ?? "—"))
         values.append(escape(record.musicKey ?? "—"))
         values.append(record.tempoBPM.map { String(format: "%.1f", $0) } ?? "—")
+        if record.timelineChanges.isEmpty {
+            values.append("—")
+        } else {
+            let changes = record.timelineChanges.prefix(3).map {
+                String(format: "%.1fs %@", $0.startTime, $0.toValue)
+            }
+            values.append(escape(changes.joined(separator: "；")))
+        }
+        if record.chordSegments.isEmpty {
+            values.append("—")
+        } else {
+            let chords = record.chordSegments.prefix(5).map { "\($0.chord)(\($0.romanNumeral))" }
+            values.append(escape(chords.joined(separator: "→")))
+        }
         values.append(escape(record.leadPart ?? "—"))
         values.append(record.integratedLUFS.map { String(format: "%.1f", $0) } ?? "—")
         values.append(String(format: "%.1f", record.truePeakDb))

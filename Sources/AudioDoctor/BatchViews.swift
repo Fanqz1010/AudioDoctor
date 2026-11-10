@@ -598,6 +598,24 @@ struct BatchRecordDetail: View {
                 level: (record.arrangementConfidence ?? 0) < 0.45 ? .review : .pass
             ))
         }
+        if let isMusic = record.isMusic {
+            values.append(BatchMetricDisplay(
+                name: "是否音乐",
+                value: isMusic ? "是" : "否 / 待复核",
+                standard: "先判断内容类型，再选择标注规范",
+                score: (record.musicConfidence ?? 0) * 100,
+                level: (record.musicConfidence ?? 0) < 0.45 ? .review : .pass
+            ))
+        }
+        if let vocal = record.vocalState {
+            values.append(BatchMetricDisplay(
+                name: "人声状态",
+                value: vocal,
+                standard: "混合音频启发式判断",
+                score: (record.vocalConfidence ?? 0) * 100,
+                level: (record.vocalConfidence ?? 0) < 0.45 ? .review : .pass
+            ))
+        }
         if let score = record.artifactOverall {
             values.append(BatchMetricDisplay(
                 name: "AI 伪影总分", value: String(format: "%.0f / 100", score),
@@ -680,6 +698,60 @@ struct BatchRecordDetail: View {
                     }
                 }
                 .padding(.top, 4)
+            }
+            if !record.timelineChanges.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("转调 / 节拍变化")
+                        .font(.caption.weight(.semibold))
+                    ForEach(record.timelineChanges.prefix(12)) { change in
+                        HStack(alignment: .top, spacing: 8) {
+                            Text(String(format: "%.1f-%.1fs", change.startTime, change.endTime))
+                                .font(.caption2.monospacedDigit())
+                                .frame(width: 88, alignment: .leading)
+                            Text(change.type)
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.purple)
+                                .frame(width: 88, alignment: .leading)
+                            Text("\(change.fromValue) → \(change.toValue)。\(change.note)")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+                .padding(10)
+                .background(Color.purple.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
+            }
+            if !record.chordSegments.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("和弦功能摘要")
+                        .font(.caption.weight(.semibold))
+                    ForEach(record.chordSegments.prefix(16)) { chord in
+                        HStack(spacing: 8) {
+                            Text(String(format: "%.1fs", chord.startTime))
+                                .font(.caption2.monospacedDigit())
+                                .frame(width: 52, alignment: .leading)
+                            Text(chord.chord)
+                                .font(.caption2.weight(.semibold))
+                                .frame(width: 52, alignment: .leading)
+                            Text(chord.romanNumeral)
+                                .font(.caption2)
+                                .frame(width: 44, alignment: .leading)
+                            Text(chord.function)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Text(String(format: "%.0f%%", chord.confidence * 100))
+                                .font(.caption2.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Text("和弦、级数与功能为近似分析，复杂编曲需人工复核。")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(10)
+                .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
             }
         }
     }

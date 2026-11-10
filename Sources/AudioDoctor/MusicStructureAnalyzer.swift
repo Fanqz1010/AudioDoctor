@@ -54,10 +54,42 @@ struct MusicArrangementAnalysis: Codable, Equatable {
     let interpretation: String
 }
 
+struct MusicContentTypeAnalysis: Codable, Equatable {
+    let isMusic: Bool
+    let musicConfidence: Float
+    let vocalState: String
+    let vocalConfidence: Float
+    let evidence: [String]
+}
+
+struct MusicTimelineChange: Codable, Identifiable, Equatable {
+    var id: String { "\(type)-\(String(format: "%.2f", startTime))" }
+    let type: String
+    let startTime: Float
+    let endTime: Float
+    let fromValue: String
+    let toValue: String
+    let confidence: Float
+    let note: String
+}
+
+struct MusicChordSegment: Codable, Identifiable, Equatable {
+    var id: String { "\(String(format: "%.2f", startTime))-\(chord)" }
+    let startTime: Float
+    let endTime: Float
+    let chord: String
+    let romanNumeral: String
+    let function: String
+    let confidence: Float
+}
+
 struct MusicStructureAnalysis: Codable, Equatable {
     let tonality: MusicTonalityAnalysis?
     let tempo: MusicTempoAnalysis?
     let arrangement: MusicArrangementAnalysis?
+    let contentType: MusicContentTypeAnalysis?
+    let timelineChanges: [MusicTimelineChange]
+    let chordSegments: [MusicChordSegment]
 }
 
 enum MusicStructureAnalyzer {
@@ -85,7 +117,33 @@ enum MusicStructureAnalyzer {
             stereoCorrelation: stereoCorrelation,
             stereoWidthPercent: stereoWidthPercent
         )
-        return MusicStructureAnalysis(tonality: tonality, tempo: tempo, arrangement: arrangement)
+        let contentType = musicContentType(
+            frames: frames,
+            sampleRate: sampleRate,
+            flux: flux,
+            chroma: chroma,
+            tempo: tempo,
+            arrangement: arrangement
+        )
+        let timelineChanges = timelineAnalysis(
+            mono: mono,
+            sampleRate: sampleRate,
+            globalTonality: tonality,
+            globalTempo: tempo
+        )
+        let chordSegments = chordSegments(
+            mono: mono,
+            sampleRate: sampleRate,
+            globalTonality: tonality
+        )
+        return MusicStructureAnalysis(
+            tonality: tonality,
+            tempo: tempo,
+            arrangement: arrangement,
+            contentType: contentType,
+            timelineChanges: timelineChanges,
+            chordSegments: chordSegments
+        )
     }
 
     // MARK: - Signal preparation
@@ -180,7 +238,7 @@ enum MusicStructureAnalyzer {
         let margin = max(0, best.score - secondScore)
         let combined = min(0.96, max(0.15, best.score * 0.68 + margin * 1.8))
         let alternatives = Array(candidates.dropFirst().prefix(3))
-        let tonicName = pitchNames.first { best.name.hasPrefix($0) } ?? String(best.name.prefix(1))
+        let tonicName = pitchNames[tonicIndex(for: best.name)]
         let topEnergy = chroma.max() ?? 0
         let averageEnergy = chroma.reduce(0, +) / Float(max(1, chroma.count))
         let clarity = topEnergy / max(averageEnergy, 1e-6)
@@ -200,6 +258,16 @@ enum MusicStructureAnalyzer {
 
     private static func confidence(fromScore score: Float) -> Float {
         min(1, max(0, (score + 0.15) / 1.15))
+    }
+
+    /// Match the longest pitch-class label first so names such as C♯/D♭ do not
+    /// accidentally resolve to C.
+    private static func tonicIndex(for keyName: String) -> Int {
+        let match = pitchNames
+            .enumerated()
+            .filter { keyName.hasPrefix($0.element) }
+            .max { lhs, rhs in lhs.element.count < rhs.element.count }
+        return match?.offset ?? 0
     }
 
     private static func rotate(_ values: [Float], offset: Int) -> [Float] {
@@ -373,6 +441,348 @@ enum MusicStructureAnalyzer {
         let mean = values.reduce(0, +) / Float(values.count)
         let variance = values.map { ($0 - mean) * ($0 - mean) }.reduce(0, +) / Float(values.count - 1)
         return sqrt(max(0, variance))
+    }
+
+    // MARK: - Annotation content type
+
+    private static func musicContentType(
+        frames: [[Float]],
+        sampleRate: Float,
+        flux: [Float],
+        chroma: [Float],
+        tempo: MusicTempoAnalysis?,
+        arrangement: MusicArrangementAnalysis?
+    ) -> MusicContentTypeAnalysis {
+        let features = spectralFeatures(frames: frames, sampleRate: sampleRate, flux: flux, chroma: chroma)
+        let rhythmScore = min(1, features.transientDensity * 0.65 + features.broadbandTransient * 0.35)
+        let musicScore =
+            (tempo?.confidence ?? 0) * 0.28 +
+            rhythmScore * 0.22 +
+            features.pitchClarity * 0.24 +
+            features.sustain * 0.14 +
+            features.signalConfidence * 0.12
+        let isMusic = musicScore >= 0.44 && features.signalConfidence > 0.16
+
+        let vocalPart = arrangement?.parts.first { $0.name.contains("人声") }
+        let vocalStrength = features.vocalBand * 0.50 +
+            features.midBand * 0.20 +
+            features.pitchClarity * 0.16 +
+            features.sustain * 0.14
+        let combinedVocal = vocalStrength * 0.68 + (vocalPart?.confidence ?? 0) * 0.32
+
+        let vocalState: String
+        if !isMusic {
+            vocalState = "非音乐内容 / 请人工复核"
+        } else if combinedVocal >= 0.54 {
+            vocalState = "带人声 / 主唱或明显人声"
+        } else if combinedVocal >= 0.38 && !(features.vocalBand < 0.25 && combinedVocal < 0.60) {
+            vocalState = "疑似人声 / 背景和声需复核"
+        } else {
+            vocalState = "纯音乐 / 未检出明显人声"
+        }
+
+        var evidence: [String] = []
+        evidence.append(String(format: "节拍稳定度 %.0f%%", (tempo?.confidence ?? 0) * 100))
+        evidence.append(String(format: "音高集中度 %.0f%%", features.pitchClarity * 100))
+        evidence.append(String(format: "人声频段线索 %.0f%%", features.vocalBand * 100))
+        evidence.append(String(format: "持续发声占比 %.0f%%", features.sustain * 100))
+        if let density = tempo?.onsetDensityPerMinute {
+            evidence.append(String(format: "Onset 密度 %.0f/分钟", density))
+        }
+
+        return MusicContentTypeAnalysis(
+            isMusic: isMusic,
+            musicConfidence: min(0.96, max(0.05, musicScore)),
+            vocalState: vocalState,
+            vocalConfidence: min(0.94, max(0.08, combinedVocal)),
+            evidence: evidence
+        )
+    }
+
+    // MARK: - Modulation, tempo, and meter changes
+
+    private static func timelineAnalysis(
+        mono: [Float],
+        sampleRate: Float,
+        globalTonality: MusicTonalityAnalysis?,
+        globalTempo: MusicTempoAnalysis?
+    ) -> [MusicTimelineChange] {
+        var changes: [MusicTimelineChange] = []
+
+        if let globalKey = globalTonality {
+            struct LocalKey {
+                let start: Float
+                let end: Float
+                let name: String
+                let confidence: Float
+            }
+            var localKeys: [LocalKey] = []
+            let window = Int(sampleRate * 5.0)
+            let hop = Int(sampleRate * 2.5)
+            guard mono.count > window, window > 0, hop > 0 else { return sortedChanges(changes) }
+            var start = 0
+            while start + window <= mono.count {
+                let segment = Array(mono[start..<(start + window)])
+                let segmentFrames = spectralFrames(segment, sampleRate: sampleRate, maxFrames: 60)
+                let segmentChroma = chromaVector(frames: segmentFrames, sampleRate: sampleRate)
+                if !segmentChroma.isEmpty {
+                    let key = tonality(chroma: segmentChroma)
+                    localKeys.append(LocalKey(
+                        start: Float(start) / sampleRate,
+                        end: Float(start + window) / sampleRate,
+                        name: key.bestKeyName,
+                        confidence: key.confidence
+                    ))
+                }
+                start += hop
+            }
+
+            var index = 0
+            while index < localKeys.count {
+                let current = localKeys[index]
+                guard current.name != globalKey.bestKeyName, current.confidence >= 0.38 else {
+                    index += 1
+                    continue
+                }
+                var endIndex = index
+                while endIndex + 1 < localKeys.count,
+                      localKeys[endIndex + 1].name == current.name,
+                      localKeys[endIndex + 1].confidence >= 0.34 {
+                    endIndex += 1
+                }
+                let span = localKeys[endIndex].end - current.start
+                // Short chord changes routinely look like local key changes.
+                // Only expose a modulation when the new tonal centre is stable
+                // long enough for annotation teams to verify it as a section.
+                if span >= 10.0 {
+                    let confidence = min(0.92, localKeys[index...endIndex].map(\.confidence).max() ?? 0)
+                    changes.append(MusicTimelineChange(
+                        type: "转调",
+                        startTime: current.start,
+                        endTime: localKeys[endIndex].end,
+                        fromValue: globalKey.bestKeyName,
+                        toValue: current.name,
+                        confidence: confidence,
+                        note: "该段落调性中心与全局调性不同，建议人工确认转调边界。"
+                    ))
+                }
+                index = endIndex + 1
+            }
+        }
+
+        if let global = globalTempo {
+            struct LocalTempo {
+                let start: Float
+                let end: Float
+                let bpm: Float
+                let signature: String
+                let confidence: Float
+            }
+            var localTempos: [LocalTempo] = []
+            let window = Int(sampleRate * 8.0)
+            let hop = Int(sampleRate * 4.0)
+            guard mono.count > window, window > 0, hop > 0 else { return sortedChanges(changes) }
+            var start = 0
+            while start + window <= mono.count {
+                let segment = Array(mono[start..<(start + window)])
+                let segmentFrames = spectralFrames(segment, sampleRate: sampleRate, maxFrames: 120)
+                let segmentFlux = onsetFlux(frames: segmentFrames)
+                if let local = tempo(flux: segmentFlux, sampleRate: sampleRate, frameCount: segment.count) {
+                    localTempos.append(LocalTempo(
+                        start: Float(start) / sampleRate,
+                        end: Float(start + window) / sampleRate,
+                        bpm: local.bpm,
+                        signature: local.timeSignatureEstimate,
+                        confidence: local.confidence
+                    ))
+                }
+                start += hop
+            }
+
+            let bpmThreshold = max(8.0, global.bpm * 0.12)
+            var tempoIndex = 0
+            while tempoIndex < localTempos.count {
+                let item = localTempos[tempoIndex]
+                let bpmChanged = abs(item.bpm - global.bpm) >= bpmThreshold
+                let signatureChanged = item.signature != global.timeSignatureEstimate
+                guard item.confidence >= 0.30, bpmChanged || signatureChanged else {
+                    tempoIndex += 1
+                    continue
+                }
+
+                // Overlapping windows often disagree by one lag near a boundary.
+                // Require a neighbouring window with a similar estimate before
+                // exposing a tempo/meter change to annotators.
+                var endIndex = tempoIndex
+                while endIndex + 1 < localTempos.count,
+                      localTempos[endIndex + 1].confidence >= 0.28,
+                      localTempos[endIndex + 1].signature == item.signature,
+                      abs(localTempos[endIndex + 1].bpm - item.bpm) <= max(4.0, item.bpm * 0.08) {
+                    endIndex += 1
+                }
+                guard endIndex > tempoIndex else {
+                    tempoIndex += 1
+                    continue
+                }
+                changes.append(MusicTimelineChange(
+                    type: signatureChanged ? "节拍 / 拍号变化" : "速度变化",
+                    startTime: item.start,
+                    endTime: localTempos[endIndex].end,
+                    fromValue: String(format: "%.1f BPM · %@", global.bpm, global.timeSignatureEstimate),
+                    toValue: String(format: "%.1f BPM · %@", (item.bpm + localTempos[endIndex].bpm) / 2, item.signature),
+                    confidence: min(0.90, localTempos[tempoIndex...endIndex].map(\.confidence).max() ?? 0),
+                    note: "局部节拍估计与全曲不同；复杂鼓点、渐快渐慢或转拍会降低置信度。"
+                ))
+                tempoIndex = endIndex + 1
+            }
+        }
+
+        return sortedChanges(changes)
+    }
+
+    private static func sortedChanges(_ changes: [MusicTimelineChange]) -> [MusicTimelineChange] {
+        changes.sorted { lhs, rhs in
+            if abs(lhs.startTime - rhs.startTime) < 0.01 {
+                return lhs.type < rhs.type
+            }
+            return lhs.startTime < rhs.startTime
+        }
+    }
+
+    // MARK: - Chord function estimation
+
+    private static func chordSegments(
+        mono: [Float],
+        sampleRate: Float,
+        globalTonality: MusicTonalityAnalysis?
+    ) -> [MusicChordSegment] {
+        let window = Int(sampleRate * 2.0)
+        let hop = Int(sampleRate * 1.0)
+        guard mono.count > window, window > 0, hop > 0 else { return [] }
+
+        struct RawChord {
+            let start: Float
+            let end: Float
+            let root: Int
+            let quality: String
+            let confidence: Float
+        }
+        var raw: [RawChord] = []
+        var start = 0
+        while start + window <= mono.count {
+            let segment = Array(mono[start..<(start + window)])
+            let frames = spectralFrames(segment, sampleRate: sampleRate, maxFrames: 36)
+            let chroma = chromaVector(frames: frames, sampleRate: sampleRate)
+            guard chroma.count == 12,
+                  let chord = bestChord(chroma: chroma) else {
+                start += hop
+                continue
+            }
+            raw.append(RawChord(
+                start: Float(start) / sampleRate,
+                end: Float(start + window) / sampleRate,
+                root: chord.root,
+                quality: chord.quality,
+                confidence: chord.confidence
+            ))
+            start += hop
+        }
+
+        var merged: [MusicChordSegment] = []
+        for item in raw {
+            let chordName = "\(pitchNames[item.root])\(item.quality)"
+            let roman = romanNumeral(root: item.root, quality: item.quality, tonality: globalTonality)
+            if let last = merged.last,
+               last.chord == chordName,
+               abs(last.endTime - item.start) <= 1.15,
+               item.end - last.startTime <= 8.5 {
+                merged[merged.count - 1] = MusicChordSegment(
+                    startTime: last.startTime,
+                    endTime: item.end,
+                    chord: chordName,
+                    romanNumeral: roman.roman,
+                    function: roman.function,
+                    confidence: max(last.confidence, item.confidence)
+                )
+            } else {
+                merged.append(MusicChordSegment(
+                    startTime: item.start,
+                    endTime: item.end,
+                    chord: chordName,
+                    romanNumeral: roman.roman,
+                    function: roman.function,
+                    confidence: item.confidence
+                ))
+            }
+        }
+        return merged
+    }
+
+    private static func bestChord(chroma: [Float]) -> (root: Int, quality: String, confidence: Float)? {
+        let templates: [(quality: String, values: [Float])] = [
+            ("", [1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0]),
+            ("m", [1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0]),
+            ("7", [1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0]),
+            ("maj7", [1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1]),
+            ("m7", [1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0]),
+            ("dim", [1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0]),
+            ("sus4", [1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0])
+        ]
+        var best: (root: Int, quality: String, confidence: Float)?
+        for rotation in 0..<12 {
+            let rotated = rotate(chroma, offset: rotation)
+            for template in templates {
+                let score = pearson(rotated, template.values)
+                let confidence = min(0.93, max(0.08, (score + 0.25) / 1.20))
+                if confidence > (best?.confidence ?? 0) {
+                    // `rotate(chroma, offset:)` places chroma[rotation] at index 0,
+                    // so the rotation itself is the chord root.
+                    let root = rotation
+                    best = (root, template.quality, confidence)
+                }
+            }
+        }
+        return best
+    }
+
+    private static func romanNumeral(
+        root: Int,
+        quality: String,
+        tonality: MusicTonalityAnalysis?
+    ) -> (roman: String, function: String) {
+        guard let tonality else { return ("—", "待人工确认") }
+        let tonic = tonicIndex(for: tonality.bestKeyName)
+        let degree = ((root - tonic) + 12) % 12
+        let isMinorKey = tonality.mode == "小调"
+        let majorNumerals = ["I", "♭II", "II", "♯II", "III", "IV", "♯IV", "V", "♭VI", "VI", "♯VI", "VII"]
+        let minorNumerals = ["I", "♭II", "II", "♯II", "III", "IV", "♯IV", "V", "♭VI", "VI", "♯VI", "VII"]
+        var numeral = isMinorKey ? minorNumerals[degree] : majorNumerals[degree]
+        if quality == "m" {
+            numeral = numeral.lowercased()
+        } else if quality == "dim" {
+            numeral = numeral.lowercased() + "°"
+        }
+        if quality == "7" || quality == "m7" || quality == "maj7" {
+            numeral += "7"
+        }
+        return (numeral, chordFunction(roman: numeral, isMinor: isMinorKey))
+    }
+
+    private static func chordFunction(roman: String, isMinor: Bool) -> String {
+        let base = roman
+            .replacingOccurrences(of: "7", with: "")
+            .replacingOccurrences(of: "°", with: "")
+        let lower = base.lowercased()
+        if ["i", "iii", "vi"].contains(lower) || lower.contains("♭vi") || lower.contains("♭iii") {
+            return "主功能 T"
+        }
+        if lower.hasPrefix("ii") || lower.hasPrefix("iv") || lower.contains("♭ii") || lower.contains("♭iv") {
+            return "下属 / 预属功能 S/PD"
+        }
+        if lower.hasPrefix("v") || lower.hasPrefix("vii") {
+            return "属功能 D"
+        }
+        return "过渡 / 待人工确认"
     }
 
     // MARK: - Arrangement role estimation

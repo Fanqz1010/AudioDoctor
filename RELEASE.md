@@ -82,3 +82,21 @@
 - LUFS, true peak, clipping, RMS, crest factor, DC offset, phase, stereo width, and spectral balance reporting.
 - De-hiss, fullness repair, reference matching, air/detail enhancement, loudness normalization, and true-peak limiting.
 - Stereo/mono conversion and WAV/AIFF export.
+## v0.5.0-beta.1 - 2026-11-10
+
+### 新增
+
+- 五大类标注工作台：内容判断、音乐结构、技术质量、时间定位、标确切认。
+- 判断是否音乐、纯音乐 / 带人声，并输出置信度与依据。
+- 转调、速度变化、节拍 / 拍号变化时间轴。
+- 和弦、级数、T/S/D 功能近似分析。
+- 批量 CSV / HTML 增加 内容类型、人声状态、转调节拍变化、和弦功能摘要。
+- 清爽可爱风修复工作台，与标注诊断强关联。
+- 新增跨平台 Web 工作台界面基础稿。
+- 新增 Mac App Store 打包脚本、App Sandbox entitlements 和提审文档。
+
+### 说明
+
+- 和弦与转调分析仍为混合音频启发式结果，需人工复核。
+- Web 版当前是界面基础稿，尚未接入本地分析引擎。
+- App Store 提交需要 Apple 开发者证书、Team ID、provisioning profile 和 App Store Connect 记录。
